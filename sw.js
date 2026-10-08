@@ -3,13 +3,13 @@
 //      Google／中繼站的請求一律不攔（登入、雲端、AI 都要即時）
 // 升版：CACHE 的數字要跟 js/config.js 的 VERSION 一起改
 
-const CACHE = 'cardbox-v0.1.1';
+const CACHE = 'cardbox-v0.2.0';
 const ASSETS = [
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/app.css?v=2',
-  './js/app.js?v=2',
+  './css/app.css?v=3',
+  './js/app.js?v=3',
   './js/config.js',
   './js/auth.js',
   './js/google.js',

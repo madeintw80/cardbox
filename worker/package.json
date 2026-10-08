@@ -2,8 +2,5 @@
   "name": "cardbox-ocr",
   "private": true,
   "type": "module",
-  "description": "名片盒辨識中繼站：驗證 Google 登入後請 Claude 讀名片",
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.131.0"
-  }
+  "description": "名片盒收件櫃：App 放照片、Boss 電腦拿件用 Claude 讀、App 拿結果"
 }

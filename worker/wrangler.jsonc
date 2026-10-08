@@ -4,17 +4,20 @@
   "main": "src/index.js",
   // 不能比本機 wrangler（借 Guandan5 的 4.92）內建的 runtime 新，否則 wrangler dev 起不來
   "compatibility_date": "2026-05-22",
-  "compatibility_flags": ["nodejs_compat"],
   "vars": {
     // 公開值：名片盒（沿用 BroTrip 專案）的 Google OAuth Client ID
     "GOOGLE_CLIENT_ID": "38081255296-ojiesn8jsdlkrsa5snlue0s3tprro3rq.apps.googleusercontent.com",
     "ALLOWED_ORIGINS": "https://madeintw80.github.io,http://localhost:3480",
     "DAILY_LIMIT": "200"
   },
-  // 每日用量計數（KV，2026-10-08 用 wrangler kv namespace create USAGE 建立）
+  // 收件櫃（D1，2026-10-08 建立）；表結構在 schema.sql
+  "d1_databases": [
+    { "binding": "DB", "database_name": "cardbox-jobs", "database_id": "152d3844-5d8d-438d-8d10-54065e6b52b8" }
+  ],
+  // 每日用量計數（KV，2026-10-08 建立）
   "kv_namespaces": [{ "binding": "USAGE", "id": "25db661108024c81ab4c7b5330ad5ec0" }],
   "observability": { "enabled": true }
   // 機密不要寫在這裡！用 wrangler secret put 設定：
-  //   ANTHROPIC_API_KEY  Claude API 金鑰
-  //   ALLOWED_EMAILS     可使用的 Gmail（逗號分隔）
+  //   RUNNER_SECRET   電腦端通行密碼（tools/setup_runner_secret.py 產生並同時設定）
+  //   ALLOWED_EMAILS  可使用的 Gmail（逗號分隔；Boss 雙擊 worker/set_allowed_emails.bat）
 }

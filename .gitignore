@@ -4,3 +4,4 @@ worker/.wrangler/
 __pycache__/
 *.pyc
 .dev.vars
+runner/logs/

@@ -15,7 +15,7 @@ const listeners = new Set();
 let saveChain = Promise.resolve(); // 寫進 Sheet 要「一張一張來」，正反面才不會同時各建一張
 
 export const Queue = {
-  items: [],   // { qid, blob, thumb, createdAt, state: queued|working|error, step, error, retryable, tries, photoId }
+  items: [],   // { qid, blob, thumb, createdAt, state: queued|working|error, step, error, retryable, tries, photoId, jobId }
   running: 0,
   paused: false, // 登入過期時暫停，重新登入後繼續
 
@@ -49,7 +49,7 @@ export const Queue = {
           qid: `q_${base.toString(36)}_${i}_${Math.random().toString(36).slice(2, 6)}`,
           blob, thumb,
           createdAt: base + i,
-          state: 'queued', step: '', error: '', retryable: true, tries: 0, photoId: '',
+          state: 'queued', step: '', error: '', retryable: true, tries: 0, photoId: '', jobId: '',
         };
         await queueDb.put(item);
         this.items.push(item);
@@ -85,10 +85,17 @@ export const Queue = {
         item.photoId = await backend.uploadPhoto(item.blob, photoFileName(item.createdAt));
         await queueDb.put(item);
       }
-      // 2) 請 AI 讀名片
-      item.step = '辨識中';
+      // 2) 放進收件櫃，等 Boss 電腦上的 Claude 讀（件號記在 item.jobId，重試時接著等同一件）
+      item.step = '送出中';
       this.emit();
-      const ocr = await recognizeCard(item.blob);
+      const ocr = await recognizeCard(item.blob, {
+        jobId: item.jobId || '',
+        onJob: (id) => { item.jobId = id; queueDb.put(item).catch(() => {}); },
+        onStatus: (s) => {
+          const step = s === 'reading' ? '辨識中' : '等待辨識';
+          if (item.step !== step) { item.step = step; this.emit(); }
+        },
+      });
       if (!ocr.is_business_card) {
         const err = new Error('這張看起來不是名片');
         err.retryable = false;
