@@ -63,7 +63,14 @@
 - ✅ 中繼站本機安全檢查 7/7（陌生網站 403、沒登入／假憑證 401、CORS 正確）
 - ✅ 中繼站打包 674KB（dry-run）
 - ✅ 試玩模式端到端：4 張批次 → 排隊辨識 → 正反面自動合併 → 編輯儲存 → 搜尋（標籤／電話）→ 刪除 → 設定頁
-- ⏳ 未驗證：真 Google 登入／Drive／Sheets（要部署到 github.io 才能登入）、真 Claude 辨識（要 API 金鑰）、iPhone／Android 實機相機
+- ⏳ 未驗證：真 Google 登入／Drive／Sheets、真 Claude 辨識（等 Boss 設 API 金鑰＋白名單）、iPhone／Android 實機相機
+
+## 線上狀態（2026-10-08 部署）
+
+- App：`https://madeintw80.github.io/cardbox/`（repo `madeintw80/cardbox` public，Pages＝main／root），線上 v0.1.1
+- 中繼站：`https://cardbox-ocr.madeintw80.workers.dev`（KV `USAGE` id `25db6611…`），線上安全冒煙 7/7
+- ⚠️ 線上冒煙要帶瀏覽器 User-Agent（Cloudflare 會擋 Python 預設 UA，回 error code 1010），`smoke_test.py` 已內建
+- 待 Boss：`worker/set_api_key.bat`（Claude API 金鑰）＋ `worker/set_allowed_emails.bat`（白名單）。沒設之前：白名單空＝所有人 403、沒金鑰＝辨識回「AI 服務設定有問題」
 
 ## 部署步驟（對外動作，每次先問 Boss）
 
