@@ -1,0 +1,9 @@
+{
+  "name": "cardbox-ocr",
+  "private": true,
+  "type": "module",
+  "description": "名片盒辨識中繼站：驗證 Google 登入後請 Claude 讀名片",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0"
+  }
+}

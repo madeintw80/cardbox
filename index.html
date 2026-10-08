@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>名片盒</title>
+  <meta name="description" content="拍名片，AI 自動整理成聯絡人；資料存在自己的 Google 雲端硬碟">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="名片盒">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/app.css?v=1">
+</head>
+<body>
+  <div id="app"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <!-- 從相簿一次選多張 -->
+  <input type="file" id="file-album" accept="image/*" multiple hidden>
+  <!-- 備援：App 內相機打不開時，改用系統相機拍一張 -->
+  <input type="file" id="file-camera" accept="image/*" capture="environment" hidden>
+
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script type="module" src="js/app.js?v=1"></script>
+</body>
+</html>

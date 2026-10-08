@@ -1,0 +1,20 @@
+{
+  "$schema": "../../Guandan5/node_modules/wrangler/config-schema.json",
+  "name": "cardbox-ocr",
+  "main": "src/index.js",
+  // 不能比本機 wrangler（借 Guandan5 的 4.92）內建的 runtime 新，否則 wrangler dev 起不來
+  "compatibility_date": "2026-05-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    // 公開值：名片盒（沿用 BroTrip 專案）的 Google OAuth Client ID
+    "GOOGLE_CLIENT_ID": "38081255296-ojiesn8jsdlkrsa5snlue0s3tprro3rq.apps.googleusercontent.com",
+    "ALLOWED_ORIGINS": "https://madeintw80.github.io,http://localhost:3480",
+    "DAILY_LIMIT": "200"
+  },
+  // 每日用量計數（KV）。部署前要先建 namespace，把拿到的 id 填進來；沒填也能跑，只是不限每日張數
+  // "kv_namespaces": [{ "binding": "USAGE", "id": "<填入 wrangler kv namespace create 拿到的 id>" }],
+  "observability": { "enabled": true }
+  // 機密不要寫在這裡！用 wrangler secret put 設定：
+  //   ANTHROPIC_API_KEY  Claude API 金鑰
+  //   ALLOWED_EMAILS     可使用的 Gmail（逗號分隔）
+}
