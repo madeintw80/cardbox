@@ -822,6 +822,9 @@ async function onExportAll() {
 
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
+  // 第一次打開時還沒有舊版，裝好快取不算「有新版本」；要先記下「打開時有沒有舊版在管」
+  // （不能事後看 controller：sw.js 的 clients.claim() 會讓第一次安裝也馬上有 controller）
+  const hadOldVersion = !!navigator.serviceWorker.controller;
   window.addEventListener('load', async () => {
     try {
       const reg = await navigator.serviceWorker.register('sw.js');
@@ -830,7 +833,7 @@ function registerServiceWorker() {
       reg.addEventListener('updatefound', () => {
         const nw = reg.installing;
         nw?.addEventListener('statechange', () => {
-          if (nw.state === 'activated' && navigator.serviceWorker.controller) {
+          if (nw.state === 'activated' && hadOldVersion) {
             showBanner('update-banner', '有新版本了', '更新', () => location.reload());
           }
         });

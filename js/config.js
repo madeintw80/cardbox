@@ -1,7 +1,7 @@
 // 名片盒 CardBox — 全域設定
 // 升版時要同步三個地方：這裡的 VERSION、sw.js 的 CACHE、index.html 與 sw.js 裡所有 ?v=
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.1.1';
 
 // Google OAuth Client ID（公開值，不是機密）：沿用 BroTrip 的 Google 專案（2026-10-08 Boss 拍板）
 // 已授權網址＝https://madeintw80.github.io（同一個網域下的 /cardbox/ 直接能用）
