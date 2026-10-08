@@ -21,9 +21,11 @@
 
 ## 給開發者
 
-規格、決策、檔案地圖、部署步驟都在 [PLAN.md](PLAN.md)。
+規格、決策、架構、檔案地圖、部署步驟都在 [PLAN.md](PLAN.md)。
 
+- 名片由開發者電腦上的拿件小程式（`runner/`）讀，電腦關機時 App 會顯示「辨識主機離線」，照片會排隊等
 - 試玩模式（不連 Google、假 AI）：網址加 `?demo=1`
 - 單元測試：`node --test tests/cards.test.mjs`
-- 中繼站安全檢查：`python worker/smoke_test.py [網址]`
+- 收件櫃安全檢查：`python worker/smoke_test.py [網址]`
+- 只測辨識：`python runner/cardbox_runner.py --test 圖片路徑`
 - 本機預覽：`python -m http.server 3480 -d .`
