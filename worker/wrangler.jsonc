@@ -11,8 +11,8 @@
     "ALLOWED_ORIGINS": "https://madeintw80.github.io,http://localhost:3480",
     "DAILY_LIMIT": "200"
   },
-  // 每日用量計數（KV）。部署前要先建 namespace，把拿到的 id 填進來；沒填也能跑，只是不限每日張數
-  // "kv_namespaces": [{ "binding": "USAGE", "id": "<填入 wrangler kv namespace create 拿到的 id>" }],
+  // 每日用量計數（KV，2026-10-08 用 wrangler kv namespace create USAGE 建立）
+  "kv_namespaces": [{ "binding": "USAGE", "id": "25db661108024c81ab4c7b5330ad5ec0" }],
   "observability": { "enabled": true }
   // 機密不要寫在這裡！用 wrangler secret put 設定：
   //   ANTHROPIC_API_KEY  Claude API 金鑰

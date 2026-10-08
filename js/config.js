@@ -8,8 +8,8 @@ export const VERSION = '0.1.0';
 // 副作用：她第一次登入時，Google 授權畫面上的 App 名稱會顯示「BroTrip」
 export const GOOGLE_CLIENT_ID = '38081255296-ojiesn8jsdlkrsa5snlue0s3tprro3rq.apps.googleusercontent.com';
 
-// 辨識中繼站（Cloudflare Worker）網址；部署後填入，例：https://cardbox-ocr.xxx.workers.dev
-export const OCR_ENDPOINT = '';
+// 辨識中繼站（Cloudflare Worker）網址，2026-10-08 部署
+export const OCR_ENDPOINT = 'https://cardbox-ocr.madeintw80.workers.dev';
 
 // 只要「自己的 App 建立的檔案」權限（drive.file）＋取得 Email 讓中繼站確認是誰
 export const GOOGLE_SCOPES = [

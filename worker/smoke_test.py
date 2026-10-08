@@ -11,9 +11,13 @@ BASE = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "http://localhost:8810"
 GOOD_ORIGIN = "http://localhost:3480"
 
 
+# Cloudflare 會擋 Python 預設的 User-Agent（error code 1010），假裝成手機瀏覽器
+UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+
+
 def call(method, path, headers=None, body=None):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(BASE + path, data=data, method=method, headers=headers or {})
+    req = urllib.request.Request(BASE + path, data=data, method=method, headers={"User-Agent": UA, **(headers or {})})
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
             return r.status, dict(r.headers), r.read().decode()
