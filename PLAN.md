@@ -106,7 +106,7 @@
 
 ## 線上狀態
 
-- App：`https://madeintw80.github.io/cardbox/`（repo `madeintw80/cardbox` public，Pages＝main／root），線上 v0.2.0；v0.3.0 已在本機 commit、等 Boss 說「部署」才 push
+- App：`https://madeintw80.github.io/cardbox/`（repo `madeintw80/cardbox` public，Pages＝main／root），v0.3.0（2026-10-27 01:46 部署，實讀線上 config.js／sw.js／cards.js／app.js 都是新版）
 - 辨識主機：2026-10-27 起已經會回公司檔案草稿（舊 App 會忽略，不影響使用）
 - 收件櫃：`https://cardbox-ocr.madeintw80.workers.dev`（D1 `cardbox-jobs`、KV `USAGE`）
 - 機密：`RUNNER_SECRET`（已設）、`ALLOWED_EMAILS`（2026-10-27 Boss 雙擊 `worker/set_allowed_emails.bat` 設好朋友＋Boss 兩個 Gmail；要加人或換人就再雙擊一次，每次會整份蓋掉舊名單，所以要全部重打）
