@@ -1,9 +1,12 @@
 # 名片盒「拿件小程式」：常駐在 Boss 電腦，每幾秒去收件櫃（Cloudflare Worker）看有沒有新名片，
 # 有就用 Boss 訂閱的 Claude（claude -p）讀，讀完把欄位放回收件櫃，朋友的 App 再拿走。
+# 讀完名片還會順便替名片上的公司準備「公司檔案草稿」（全名、在做什麼、產業、地區），見 company_profile.py
 #
 # 用法：
 #   python C:/Users/User/projects/CardBox/runner/cardbox_runner.py            常駐（resident_services 用這個）
 #   python C:/Users/User/projects/CardBox/runner/cardbox_runner.py --test 圖片  只讀一張本機圖片、印出結果（不連收件櫃）
+#   python C:/Users/User/projects/CardBox/runner/cardbox_runner.py --profile '{"company": "GREIF", "email": "a@greif.com"}'
+#                                                                              只查一次公司檔案草稿（不連收件櫃）
 #   python C:/Users/User/projects/CardBox/runner/cardbox_runner.py --once      只拿一件就結束（測試用）
 #
 # 安全設計：
@@ -27,6 +30,8 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+import company_profile
+
 sys.stdout.reconfigure(encoding="utf-8")
 
 HERE = Path(__file__).resolve().parent
@@ -42,7 +47,7 @@ WORKERS = 2                # 同時讀幾張
 IDLE_SLEEP = 3             # 沒件時隔幾秒再問
 ERROR_SLEEP = 15           # 連不上收件櫃時隔幾秒再試
 MODEL = "claude-opus-5-5"  # Boss 選的模型
-USER_AGENT = "CardBoxRunner/0.2"  # Cloudflare 會擋 Python 預設 UA（error 1010）
+USER_AGENT = "CardBoxRunner/0.3"  # Cloudflare 會擋 Python 預設 UA（error 1010）
 
 SYSTEM_PROMPT = """You read photos of business cards and return structured contact data as JSON.
 
@@ -76,17 +81,15 @@ class OcrFailed(Exception):
     pass
 
 
-def read_card(image_b64: str, media_type: str) -> dict:
-    """把一張名片照片交給 claude -p 讀，回傳欄位 dict；失敗丟 OcrFailed（訊息會顯示給使用者）"""
-    message = {"type": "user", "message": {"role": "user", "content": [
-        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_b64}},
-        {"type": "text", "text": "Read this business card."},
-    ]}}
+def ask_claude(content: list, system_prompt: str, schema: dict, timeout: int):
+    """把內容（圖片／文字）交給 claude -p，Claude 沒有任何工具、只能照 schema 回答。
+    回傳 (結構化結果 dict 或 None, 結束事件 dict, 錯誤尾段)；逾時會丟 subprocess.TimeoutExpired"""
+    message = {"type": "user", "message": {"role": "user", "content": content}}
     cmd = [shutil.which("claude") or "claude", "-p",
            "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
            "--model", MODEL,
-           "--system-prompt", SYSTEM_PROMPT,
-           "--json-schema", json.dumps(CARD_SCHEMA, separators=(",", ":")),
+           "--system-prompt", system_prompt,
+           "--json-schema", json.dumps(schema, separators=(",", ":")),
            "--strict-mcp-config", "--mcp-config", str(EMPTY_MCP),
            "--restricted", "--tools", "",
            "--max-budget-usd", "1.00"]
@@ -94,9 +97,7 @@ def read_card(image_b64: str, media_type: str) -> dict:
     work.mkdir(parents=True, exist_ok=True)
     try:
         r = subprocess.run(cmd, input=json.dumps(message) + "\n", capture_output=True, text=True,
-                           encoding="utf-8", timeout=180, cwd=str(work))
-    except subprocess.TimeoutExpired:
-        raise OcrFailed("電腦端辨識逾時，請重試")
+                           encoding="utf-8", timeout=timeout, cwd=str(work))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -108,10 +109,26 @@ def read_card(image_b64: str, media_type: str) -> dict:
             continue
         if ev.get("type") == "result":
             result_event = ev
-    card = (result_event or {}).get("structured_output")
-    if not isinstance(card, dict):
-        tail = ((result_event or {}).get("result") or r.stderr or r.stdout or "")[-300:]
-        log.warning("claude -p 沒有結構化結果 exit=%s tail=%s", r.returncode, tail.replace("\n", " "))
+    result_event = result_event or {}
+    out = result_event.get("structured_output")
+    if isinstance(out, dict):
+        return out, result_event, ""
+    tail = (result_event.get("result") or r.stderr or r.stdout or "")[-300:]
+    return None, result_event, f"exit={r.returncode} {tail}"
+
+
+def read_card(image_b64: str, media_type: str) -> dict:
+    """把一張名片照片交給 claude -p 讀，回傳欄位 dict；失敗丟 OcrFailed（訊息會顯示給使用者）"""
+    content = [
+        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_b64}},
+        {"type": "text", "text": "Read this business card."},
+    ]
+    try:
+        card, result_event, tail = ask_claude(content, SYSTEM_PROMPT, CARD_SCHEMA, timeout=180)
+    except subprocess.TimeoutExpired:
+        raise OcrFailed("電腦端辨識逾時，請重試")
+    if card is None:
+        log.warning("claude -p 沒有結構化結果 %s", tail.replace("\n", " "))
         if any(k in tail.lower() for k in ("usage limit", "rate limit", "limit reached", "overloaded")):
             raise OcrFailed("辨識主機的 Claude 額度暫時用完，稍後再試")
         if any(k in tail.lower() for k in ("401", "authentication", "login")):
@@ -120,9 +137,16 @@ def read_card(image_b64: str, media_type: str) -> dict:
     # 保險：欄位一定是字串、一定都在
     clean = {f: str(card.get(f) or "").strip() for f in FIELDS}
     clean["is_business_card"] = card.get("is_business_card") is not False
-    cost = (result_event or {}).get("total_cost_usd")
-    log.info("讀完：%s／%s（約當 US$%s）", clean["name"] or "?", clean["company"] or "?", cost)
+    log.info("讀完：%s／%s（約當 US$%s）", clean["name"] or "?", clean["company"] or "?",
+             result_event.get("total_cost_usd"))
     return clean
+
+
+def read_card_with_profile(image_b64: str, media_type: str) -> dict:
+    """讀名片＋公司檔案草稿（草稿查不到只會是空白，不影響名片）"""
+    card = read_card(image_b64, media_type)
+    card.update(company_profile.company_profile(card, ask_claude))
+    return card
 
 
 # ======================= 收件櫃（Worker）=======================
@@ -166,7 +190,7 @@ def process_one(secret: str) -> bool:
     job_id = job["id"]
     log.info("拿到一件 %s", job_id[:8])
     try:
-        card = read_card(job["image"], job.get("media_type") or "image/jpeg")
+        card = read_card_with_profile(job["image"], job.get("media_type") or "image/jpeg")
         payload = {"id": job_id, "card": card}
     except OcrFailed as e:
         payload = {"id": job_id, "error": str(e)}
@@ -226,7 +250,9 @@ def _drain_lock_socket(sock: socket.socket):
             return
 
 
-STUCK_SECONDS = 400  # 一輪最久＝claude 180 秒＋兩次網路 30 秒，留足餘裕；超過就不寫心跳，讓 resident_services 重啟
+# 一輪最久＝讀名片 180 秒＋公司檔案（看官網 15＋Claude 90）＋兩次網路 30 秒，留足餘裕；
+# 超過就不寫心跳，讓 resident_services 重啟
+STUCK_SECONDS = 400
 
 
 def run_forever():
@@ -275,6 +301,7 @@ def run_forever():
 def main():
     p = argparse.ArgumentParser(description="名片盒拿件小程式")
     p.add_argument("--test", metavar="IMAGE", help="只讀一張本機圖片並印出結果")
+    p.add_argument("--profile", metavar="CARD_JSON", help="只查一次公司檔案草稿（名片欄位 JSON）")
     p.add_argument("--once", action="store_true", help="只拿一件就結束")
     args = p.parse_args()
 
@@ -283,8 +310,15 @@ def main():
         path = Path(args.test)
         media = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
         t = time.time()
-        card = read_card(base64.b64encode(path.read_bytes()).decode(), media)
+        card = read_card_with_profile(base64.b64encode(path.read_bytes()).decode(), media)
         print(json.dumps(card, ensure_ascii=False, indent=2))
+        print(f"耗時 {time.time() - t:.1f} 秒")
+        return
+    if args.profile:
+        setup_logging(to_file=False)
+        t = time.time()
+        print(json.dumps(company_profile.company_profile(json.loads(args.profile), ask_claude),
+                         ensure_ascii=False, indent=2))
         print(f"耗時 {time.time() - t:.1f} 秒")
         return
     if args.once:

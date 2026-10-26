@@ -1,9 +1,12 @@
 // 名片盒 CardBox — 主程式：畫面切換、按鈕事件
 // 頁面用網址 # 切換（手機返回鍵／滑動返回都能用）：
-//   #/            名片清單
-//   #/card/<id>   名片詳細
-//   #/edit/<id>   編輯名片
-//   #/settings    設定
+//   #/                    清單（名片／公司 兩個分頁）
+//   #/card/<id>           名片詳細
+//   #/edit/<id>           編輯名片
+//   #/company/<id>        公司檔案
+//   #/company-edit/<id>   編輯公司檔案
+//   #/settings            設定
+//   #/options             整理下拉選單
 
 import { VERSION, DEMO_MODE } from './config.js';
 import { Auth } from './auth.js';
@@ -16,20 +19,45 @@ import { openCamera, cameraSupported } from './camera.js';
 import {
   EDITABLE_FIELDS, OCR_FIELDS, searchCards, sortCards, avatarText,
   cardToVCard, cardsToVCard, splitMulti, withScheme, telHref,
+  COMPANY_FIELDS, PICK_FIELDS, PRODUCT_FIELD, GROUP_FIELDS, UNGROUPED,
+  companyDisplayName, cleanFullName, autoFieldSet, totalTons, cleanProducts, makeCompanyFromCard,
+  searchCompanies, sortCompanies, pickOptions, optionCounts, renameOption, groupCards,
+  localDayKey, monthGrid, shiftMonth,
 } from './cards.js';
 import {
-  esc, toast, confirmDialog, actionSheet, showBanner, hideBanner,
+  esc, toast, confirmDialog, promptDialog, actionSheet, showBanner, hideBanner,
   shareOrDownload, copyText, detectInAppBrowser, isStandalone, isIOS,
 } from './ui.js';
 
 const $app = document.getElementById('app');
 const FIELD_LABEL = Object.fromEntries(EDITABLE_FIELDS);
+const COMPANY_LABEL = { ...Object.fromEntries(COMPANY_FIELDS), [PRODUCT_FIELD]: '需求產品' };
+const GROUP_LABEL = Object.fromEntries(GROUP_FIELDS.map(([key, label]) => [key, label]));
+
+// 自訂排序（她用「＋」加的分組欄位）存在這支手機
+function loadCustomSorts() {
+  try {
+    const list = JSON.parse(localStorage.getItem('cardbox_custom_sorts') || '[]');
+    return Array.isArray(list) ? list.filter((k) => GROUP_LABEL[k]) : [];
+  } catch {
+    return [];
+  }
+}
 
 const view = {
   query: '',
+  mode: localStorage.getItem('cardbox_mode') === 'companies' ? 'companies' : 'cards', // 清單看名片還是公司
   sort: localStorage.getItem('cardbox_sort') || 'recent',
+  customSorts: loadCustomSorts(),
+  month: '',      // 日曆正在看哪個月（"2026-10"；空白＝最新名片那個月）
+  day: '',        // 日曆點選的那一天（空白＝整個月）
+  relation: '',   // 公司分頁：只看某種關係（空白＝全部）
   listScroll: 0,
 };
+if (view.sort.startsWith('group:') && !view.customSorts.includes(view.sort.slice(6))) view.sort = 'recent';
+
+const companyOf = (card) => Store.companyOf(card);
+const companyNameOf = (card) => companyDisplayName(companyOf(card)) || card.company;
 
 // ======================= 啟動 =======================
 
@@ -39,6 +67,7 @@ async function boot() {
   window.addEventListener('cardbox:auth-expired', onAuthExpired);
   $app.addEventListener('click', onClick);
   $app.addEventListener('input', onInput);
+  $app.addEventListener('change', onChange);
   document.getElementById('file-album').addEventListener('change', onFilesPicked);
   document.getElementById('file-camera').addEventListener('change', onFilesPicked);
 
@@ -98,7 +127,10 @@ function parseRoute() {
   const [name, id] = parts;
   if (name === 'card' && id) return { name: 'card', id: decodeURIComponent(id) };
   if (name === 'edit' && id) return { name: 'edit', id: decodeURIComponent(id) };
+  if (name === 'company' && id) return { name: 'company', id: decodeURIComponent(id) };
+  if (name === 'company-edit' && id) return { name: 'company-edit', id: decodeURIComponent(id) };
   if (name === 'settings') return { name: 'settings' };
+  if (name === 'options') return { name: 'options' };
   return { name: 'list' };
 }
 
@@ -131,11 +163,14 @@ function render(reason = 'route') {
   // 佇列變化只影響清單頁
   if (reason === 'queue') return;
   // 正在編輯時，別的地方的變化不要把表單洗掉
-  if (route.name === 'edit' && current === 'edit' && reason !== 'route') return;
+  if ((route.name === 'edit' || route.name === 'company-edit') && current === route.name && reason !== 'route') return;
 
   if (route.name === 'card') renderDetail(route.id);
   else if (route.name === 'edit') renderEdit(route.id);
+  else if (route.name === 'company') renderCompany(route.id);
+  else if (route.name === 'company-edit') renderCompanyEdit(route.id);
   else if (route.name === 'settings') renderSettings();
+  else if (route.name === 'options') renderOptions();
   if (reason === 'route') window.scrollTo(0, 0);
 }
 
@@ -196,8 +231,11 @@ function renderList() {
         <button type="button" class="icon-btn" data-action="refresh" aria-label="重新整理" id="refresh-btn">⟳</button>
         <a class="icon-btn" href="#/settings" aria-label="設定">⚙︎</a>
       </div>
+      <div class="mode-tabs" id="mode-tabs"></div>
       <div class="search">
-        <input type="search" id="search" placeholder="搜尋姓名、公司、職稱、電話、備註…" value="${esc(view.query)}" autocomplete="off">
+        <input type="search" id="search" value="${esc(view.query)}" autocomplete="off" placeholder="${view.mode === 'companies'
+          ? '搜尋公司、產品、產業、地區、備註…'
+          : '搜尋姓名、公司、職稱、電話、備註…'}">
       </div>
       <div class="sort-row" id="sort-row"></div>
     </header>
@@ -212,16 +250,20 @@ function renderList() {
 }
 
 function updateListParts() {
+  const isCompanies = view.mode === 'companies';
   const countEl = document.getElementById('card-count');
   if (countEl) countEl.textContent = Store.cards.length ? `${Store.cards.length} 張` : '';
   document.getElementById('refresh-btn')?.classList.toggle('spinning', Store.loading);
 
-  const sortRow = document.getElementById('sort-row');
-  if (sortRow) {
-    const opts = [['recent', '最新'], ['name', '姓名'], ['company', '公司']];
-    sortRow.innerHTML = opts.map(([k, label]) =>
-      `<button type="button" class="chip ${view.sort === k ? 'active' : ''}" data-action="sort" data-sort="${k}">${label}</button>`).join('');
+  const tabs = document.getElementById('mode-tabs');
+  if (tabs) {
+    tabs.innerHTML = [['cards', `名片 ${Store.cards.length || ''}`], ['companies', `公司 ${Store.companies.length || ''}`]]
+      .map(([k, label]) => `<button type="button" class="mode-tab ${view.mode === k ? 'active' : ''}" data-action="mode" data-mode="${k}">${esc(label.trim())}</button>`)
+      .join('');
   }
+
+  const sortRow = document.getElementById('sort-row');
+  if (sortRow) sortRow.innerHTML = isCompanies ? relationChipsHtml() : sortChipsHtml();
 
   const qBox = document.getElementById('queue-box');
   if (qBox) qBox.innerHTML = queueHtml();
@@ -229,22 +271,50 @@ function updateListParts() {
 
   const body = document.getElementById('list-body');
   if (!body) return;
-  const list = sortCards(searchCards(Store.cards, view.query), view.sort);
-  if (!Store.cards.length) {
-    body.innerHTML = Store.loading && !Store.loaded
-      ? '<div class="empty">讀取中…</div>'
-      : `<div class="empty"><div class="empty-icon">🗂️</div><p>還沒有名片</p><p class="muted">按下面的「拍名片」，或從相簿一次選很多張</p></div>`;
+  if (Store.loading && !Store.loaded && !Store.cards.length) {
+    body.innerHTML = '<div class="empty">讀取中…</div>';
     return;
   }
-  if (!list.length) {
-    body.innerHTML = `<div class="empty"><p>找不到「${esc(view.query)}」</p></div>`;
-    return;
+  body.innerHTML = isCompanies ? companiesBodyHtml() : cardsBodyHtml();
+  hydrateImages(body);
+}
+
+// 名片分頁的排序按鈕：內建四種＋她自己加的分組＋「＋」
+function sortChipsHtml() {
+  const opts = [['recent', '最新'], ['name', '姓名'], ['company', '公司'], ['date', '📅 日曆'],
+    ...view.customSorts.map((k) => [`group:${k}`, GROUP_LABEL[k]])];
+  return opts.map(([k, label]) =>
+    `<button type="button" class="chip ${view.sort === k ? 'active' : ''}" data-action="sort" data-sort="${esc(k)}">${esc(label)}</button>`).join('')
+    + '<button type="button" class="chip chip-add" data-action="add-sort" aria-label="新增排序">＋</button>';
+}
+
+// 公司分頁：用「關係」篩選
+function relationChipsHtml() {
+  const counts = optionCounts(Store.companies, 'relation');
+  const missing = Store.companies.filter((co) => !co.relation).length;
+  const opts = [['', '全部'], ...pickOptions(Store.companies, 'relation').map((v) => [v, `${v} ${counts.get(v) || 0}`])];
+  if (missing) opts.push([UNGROUPED, `未填 ${missing}`]);
+  return opts.map(([v, label]) =>
+    `<button type="button" class="chip ${view.relation === v ? 'active' : ''}" data-action="relation" data-value="${esc(v)}">${esc(label)}</button>`).join('');
+}
+
+function cardsBodyHtml() {
+  if (!Store.cards.length) {
+    return `<div class="empty"><div class="empty-icon">🗂️</div><p>還沒有名片</p><p class="muted">按下面的「拍名片」，或從相簿一次選很多張</p></div>`;
+  }
+  const found = searchCards(Store.cards, view.query, companyOf);
+  if (view.sort === 'date') return calendarHtml(found);
+  if (!found.length) return `<div class="empty"><p>找不到「${esc(view.query)}」</p></div>`;
+
+  if (view.sort.startsWith('group:')) {
+    return groupCards(found, view.sort.slice(6), companyOf).map(([group, list]) =>
+      `<div class="group-head">${esc(group)} <span class="group-n">${list.length}</span></div>${list.map(cardItemHtml).join('')}`).join('');
   }
   let html = '';
   let lastGroup = null;
-  for (const card of list) {
+  for (const card of sortCards(found, view.sort, companyNameOf)) {
     if (view.sort === 'company') {
-      const group = card.company || '（沒有公司）';
+      const group = companyNameOf(card) || '（沒有公司）';
       if (group !== lastGroup) {
         html += `<div class="group-head">${esc(group)}</div>`;
         lastGroup = group;
@@ -252,13 +322,86 @@ function updateListParts() {
     }
     html += cardItemHtml(card);
   }
-  body.innerHTML = html;
-  hydrateImages(body);
+  return html;
+}
+
+const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+
+// 日曆：上面是月曆（有加名片的日子標張數），下面是那個月（或點選那天）的名片，依日期分段
+function calendarHtml(cards) {
+  const byDay = new Map();
+  for (const card of cards) {
+    const key = localDayKey(card.created_at);
+    if (!byDay.has(key)) byDay.set(key, []);
+    byDay.get(key).push(card);
+  }
+  if (!view.month) {
+    const latest = [...byDay.keys()].filter(Boolean).sort().at(-1);
+    view.month = (latest || localDayKey(new Date().toISOString())).slice(0, 7);
+  }
+  const today = localDayKey(new Date().toISOString());
+  const [y, m] = view.month.split('-').map(Number);
+  const cells = monthGrid(view.month).map((day) => {
+    if (!day) return '<span class="cal-cell blank"></span>';
+    const n = byDay.get(day)?.length || 0;
+    const cls = ['cal-cell', n ? 'has' : '', day === view.day ? 'sel' : '', day === today ? 'today' : ''].join(' ');
+    return `<button type="button" class="${cls}" data-action="cal-day" data-day="${day}" ${n ? '' : 'disabled'}>
+      <span class="cal-num">${Number(day.slice(8))}</span>${n ? `<span class="cal-n">${n}</span>` : ''}</button>`;
+  }).join('');
+
+  const days = [...byDay.keys()].filter((d) => (view.day ? d === view.day : d.startsWith(view.month))).sort().reverse();
+  const monthTotal = [...byDay.entries()].filter(([d]) => d.startsWith(view.month)).reduce((s, [, l]) => s + l.length, 0);
+  const listHtml = days.length
+    ? days.map((d) => {
+      const list = [...byDay.get(d)].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+      const date = new Date(`${d}T00:00:00`);
+      return `<div class="group-head">${date.getMonth() + 1}/${date.getDate()}（${WEEKDAYS[date.getDay()]}） <span class="group-n">${list.length} 張</span></div>${list.map(cardItemHtml).join('')}`;
+    }).join('')
+    : `<div class="empty small">${view.query ? `這個月沒有符合「${esc(view.query)}」的名片` : '這個月沒有加名片'}</div>`;
+
+  return `
+    <div class="cal">
+      <div class="cal-head">
+        <button type="button" class="icon-btn" data-action="cal-month" data-delta="-1" aria-label="上個月">‹</button>
+        <span class="cal-title">${y} 年 ${m} 月 <span class="muted small">${monthTotal} 張</span></span>
+        <button type="button" class="icon-btn" data-action="cal-month" data-delta="1" aria-label="下個月">›</button>
+      </div>
+      <div class="cal-grid">${WEEKDAYS.map((w) => `<span class="cal-week">${w}</span>`).join('')}${cells}</div>
+      ${view.day ? `<div class="cal-filter">只看 ${Number(view.day.slice(5, 7))}/${Number(view.day.slice(8))} 加入的名片 <button type="button" class="chip" data-action="cal-day" data-day="">看整個月</button></div>` : ''}
+    </div>
+    ${listHtml}`;
+}
+
+function companiesBodyHtml() {
+  if (!Store.companies.length) {
+    return `<div class="empty"><div class="empty-icon">🏢</div><p>還沒有公司檔案</p>
+      <p class="muted">拍名片時會自動建立；也可以在名片的編輯頁指定公司</p></div>`;
+  }
+  let list = sortCompanies(searchCompanies(Store.companies, view.query));
+  if (view.relation) list = list.filter((co) => (co.relation || UNGROUPED) === view.relation);
+  if (!list.length) return `<div class="empty"><p>找不到符合的公司</p></div>`;
+  return list.map(companyItemHtml).join('');
+}
+
+function companyItemHtml(co) {
+  const name = companyDisplayName(co);
+  const full = cleanFullName(co.full_name);
+  const n = Store.cardsOfCompany(co.id).length;
+  const sub = [co.relation, co.industry, co.region].filter(Boolean).join(' · ') || co.about;
+  return `
+    <a class="card-item" href="#/company/${encodeURIComponent(co.id)}">
+      <div class="card-thumb co-thumb"><span class="avatar">${esc(Array.from(name)[0] || '?')}</span></div>
+      <div class="card-main">
+        <div class="card-name">${esc(name)}${full && full !== name ? ` <span class="muted">${esc(full)}</span>` : ''}</div>
+        <div class="card-sub">${esc(sub || '')}</div>
+      </div>
+      <span class="count-badge">${n} 張</span>
+    </a>`;
 }
 
 function cardItemHtml(card) {
   const name = card.name || card.name_alt || '（沒有姓名）';
-  const sub = [card.title, card.company].filter(Boolean).join(' · ');
+  const sub = [card.title, companyNameOf(card)].filter(Boolean).join(' · ');
   const photo = card.photos?.[0];
   return `
     <a class="card-item" href="#/card/${encodeURIComponent(card.id)}">
@@ -460,6 +603,7 @@ function renderDetail(id) {
         ${role ? `<div class="person-role">${esc(role)}</div>` : ''}
         ${card.company ? `<div class="person-company">${esc(card.company)}</div>` : ''}
       </div>
+      ${companyCardHtml(card)}
       <div class="info-list">
         ${infoRows(card) || '<div class="empty small">還沒有聯絡資料，按右上角「編輯」補上</div>'}
       </div>
@@ -472,6 +616,26 @@ function renderDetail(id) {
       <div class="meta">建立 ${esc(fmtTime(card.created_at))}${card.updated_at && card.updated_at !== card.created_at ? `　修改 ${esc(fmtTime(card.updated_at))}` : ''}</div>
     </div>`;
   hydrateImages($app);
+}
+
+const autoTag = () => '<span class="auto-tag">自動產生</span>';
+
+// 名片詳細頁裡的「公司小卡」：公司全名、在做什麼、關係／產業／地區、需求產品，點了進公司檔案
+function companyCardHtml(card) {
+  const co = companyOf(card);
+  if (!co) return '';
+  const auto = autoFieldSet(co);
+  const name = companyDisplayName(co);
+  const chips = [co.relation, co.industry, co.region, co.sales_type].filter(Boolean);
+  const products = co.products.map((p) => `${p.name}${p.tons ? ` ${p.tons} 噸/月` : ''}`).join('、');
+  return `
+    <a class="co-card" href="#/company/${encodeURIComponent(co.id)}">
+      <div class="co-card-head"><span class="co-card-name">🏢 ${esc(name)}</span><span class="co-card-go">公司檔案 ›</span></div>
+      ${co.full_name && cleanFullName(co.full_name) !== name ? `<div class="co-card-full">${esc(co.full_name)}${auto.has('full_name') ? autoTag() : ''}</div>` : ''}
+      ${co.about ? `<div class="co-card-about">${esc(co.about)}${auto.has('about') ? autoTag() : ''}</div>` : ''}
+      ${chips.length ? `<div class="co-chips">${chips.map((c) => `<span class="tag tag-soft">${esc(c)}</span>`).join('')}</div>` : ''}
+      ${products ? `<div class="co-card-products">需求產品：${esc(products)}</div>` : ''}
+    </a>`;
 }
 
 function topbar(title, right = '') {
@@ -536,7 +700,7 @@ async function onDelete(card) {
 
 async function onVCard(card) {
   const name = (card.name || card.company || 'card').replace(/[\\/:*?"<>|]/g, '');
-  const result = await shareOrDownload(cardToVCard(card), `${name}.vcf`, 'text/vcard');
+  const result = await shareOrDownload(cardToVCard(card, companyOf(card)), `${name}.vcf`, 'text/vcard');
   if (result === 'downloaded') {
     toast(isIOS() ? '已下載，點開檔案選「加入聯絡人」' : '已下載通訊錄檔，點開就能加入聯絡人', 4000);
   }
@@ -561,6 +725,20 @@ async function onReOcr(card) {
   }
   const changes = OCR_FIELDS.filter((f) => ocr[f] && ocr[f] !== card[f]);
   if (!changes.length) {
+    // 名片沒變，但可能還沒有公司檔案（v0.3.0 以前拍的）→ 補建
+    if (!companyOf(card)) {
+      try {
+        const linked = await Store.linkCompany(card, ocr.auto);
+        if (linked.company_id) {
+          await Store.update(linked);
+          toast('名片沒有變，已補上公司檔案');
+          return;
+        }
+      } catch (err) {
+        handleError(err, '補公司檔案失敗');
+        return;
+      }
+    }
     toast('辨識結果跟現在的資料一樣，不用改');
     return;
   }
@@ -584,10 +762,12 @@ async function onReOcr(card) {
   const apply = await confirmDialog({ title: '要套用哪些欄位？', html, okText: '套用勾選的欄位' });
   document.removeEventListener('change', onChange);
   if (!apply || !picked.length) return;
-  const updated = { ...card };
+  let updated = { ...card };
   for (const f of picked) updated[f] = ocr[f];
   if (ocr.raw_text) updated.raw_text = ocr.raw_text;
   try {
+    // 順便補公司檔案（舊名片還沒有公司檔案的，重新辨識一次就會建好、填上 AI 查的全名和簡介）
+    updated = await Store.linkCompany(updated, ocr.auto);
     await Store.update(updated);
     toast(`已更新 ${picked.length} 個欄位`);
   } catch (err) {
@@ -615,12 +795,28 @@ function renderEdit(id) {
           ${longFields.has(key)
             ? `<textarea name="${key}" rows="${key === 'note' ? 3 : 2}">${esc(card[key])}</textarea>`
             : `<input name="${key}" value="${esc(card[key])}" ${fieldInputAttrs(key)}>`}
-        </label>`).join('')}
+        </label>${key === 'company' ? companySelectHtml(card) : ''}`).join('')}
       <p class="muted small">多個電話或 Email 用逗號「,」隔開；標籤也用逗號隔開（例：客戶, 展覽）</p>
       <button type="submit" class="btn btn-primary btn-big">儲存</button>
     </form>`;
   hydrateImages($app);
   document.getElementById('edit-form').addEventListener('submit', (e) => { e.preventDefault(); onSave(); });
+}
+
+// 「所屬公司」選單：自動配對錯了可以在這裡改；也可以用「公司」欄建一個新的公司檔案
+function companySelectHtml(card) {
+  const current = companyOf(card)?.id || '';
+  const options = sortCompanies(Store.companies).map((co) =>
+    `<option value="${esc(co.id)}" ${co.id === current ? 'selected' : ''}>${esc(companyDisplayName(co))}</option>`).join('');
+  return `
+    <label class="field">
+      <span class="field-label">所屬公司檔案 <span class="muted">（同公司的名片共用一份公司資料）</span></span>
+      <select name="company_id">
+        <option value="" ${current ? '' : 'selected'}>（不歸屬任何公司）</option>
+        ${options}
+        <option value="__new">＋ 用上面的「公司」欄建立新的公司檔案</option>
+      </select>
+    </label>`;
 }
 
 function fieldInputAttrs(key) {
@@ -639,8 +835,20 @@ async function onSave() {
   const updated = { ...card };
   for (const [key] of EDITABLE_FIELDS) updated[key] = (form.elements[key]?.value || '').trim();
   updated.status = 'ok';
+  const pickedCompany = form.elements.company_id?.value ?? updated.company_id;
   saving = true;
   try {
+    if (pickedCompany === '__new') {
+      const co = makeCompanyFromCard(updated);
+      if (!co) {
+        toast('「公司」欄是空的，沒辦法建公司檔案');
+        return;
+      }
+      await Store.addCompany(co);
+      updated.company_id = co.id;
+    } else {
+      updated.company_id = pickedCompany;
+    }
     await Store.update(updated);
     toast('已儲存');
     history.back();
@@ -649,6 +857,311 @@ async function onSave() {
   } finally {
     saving = false;
   }
+}
+
+// ======================= 公司檔案頁 =======================
+
+function renderCompany(id) {
+  const co = Store.getCompany(id);
+  $app.dataset.view = 'company';
+  if (!co) {
+    $app.innerHTML = `${topbar('公司檔案')}<div class="empty">${Store.loaded ? '找不到這個公司檔案（可能已經刪除）' : '讀取中…'}</div>`;
+    return;
+  }
+  const auto = autoFieldSet(co);
+  const name = companyDisplayName(co);
+  const cards = sortCards(Store.cardsOfCompany(co.id), 'name');
+  const chips = [co.relation, co.industry, co.region, co.sales_type].filter(Boolean);
+  $app.innerHTML = `
+    ${topbar('公司檔案', `<a class="topbar-action" href="#/company-edit/${encodeURIComponent(co.id)}">編輯</a>`)}
+    <div class="detail">
+      <div class="person">
+        <h1>🏢 ${esc(name)}</h1>
+        ${co.full_name && cleanFullName(co.full_name) !== name ? `<div class="person-alt">${esc(co.full_name)}${auto.has('full_name') ? autoTag() : ''}</div>` : ''}
+        ${chips.length ? `<div class="co-chips">${chips.map((c) => `<span class="tag tag-soft">${esc(c)}</span>`).join('')}</div>` : ''}
+      </div>
+      <div class="about-box">${co.about
+        ? `${esc(co.about)}${auto.has('about') ? autoTag() : ''}`
+        : '<span class="muted">還沒寫這家公司在做什麼，按右上角「編輯」補上</span>'}</div>
+      <div class="section-title">需求產品</div>
+      ${productsHtml(co)}
+      <div class="section-title">公司資料</div>
+      <div class="info-list">${companyInfoRows(co, auto) || '<div class="empty small">還沒有資料，按右上角「編輯」補上</div>'}</div>
+      <div class="section-title">這家公司的名片（${cards.length} 張）</div>
+      <div>${cards.map(cardItemHtml).join('') || '<div class="empty small">還沒有名片歸到這家公司</div>'}</div>
+      <div class="detail-actions">
+        <button type="button" class="btn btn-ghost danger-text" data-action="company-delete">🗑 刪除公司檔案（名片不會刪）</button>
+      </div>
+      <div class="meta">建立 ${esc(fmtTime(co.created_at))}${co.updated_at && co.updated_at !== co.created_at ? `　修改 ${esc(fmtTime(co.updated_at))}` : ''}</div>
+    </div>`;
+  hydrateImages($app);
+}
+
+function productsHtml(co) {
+  if (!co.products.length) return '<div class="info-list"><div class="empty small">還沒填需求產品</div></div>';
+  const { sum, skipped } = totalTons(co.products);
+  return `
+    <div class="info-list">
+      ${co.products.map((p) => `
+        <div class="prod-line"><span>${esc(p.name || '（沒寫產品名）')}</span><span class="muted">${p.tons ? `${esc(p.tons)} 噸/月` : '—'}</span></div>`).join('')}
+      ${co.products.length > 1 ? `<div class="prod-line prod-total"><span>合計</span><span>${sum} 噸/月${skipped ? '（有幾筆不是數字沒算進去）' : ''}</span></div>` : ''}
+    </div>`;
+}
+
+function companyInfoRows(co, auto) {
+  const rows = [];
+  // compact：下拉選單類的短欄位（關係、產業…）一行一個、不放複製鍵
+  const row = (label, value, isAuto = false, actions = '', compact = false) => rows.push(`
+    <div class="info-row">
+      <div class="info-label">${esc(label)}</div>
+      <div class="info-value">${esc(value)}${isAuto ? autoTag() : ''}</div>
+      ${compact ? '' : `<div class="info-acts">${actions}<button type="button" class="chip" data-action="copy" data-text="${esc(value)}">複製</button></div>`}
+    </div>`);
+  for (const key of ['relation', 'industry', 'region', 'sales_type', 'material_source']) {
+    if (co[key]) row(COMPANY_LABEL[key], co[key], auto.has(key), '', true);
+  }
+  if (co.full_name) row('公司全名', co.full_name, auto.has('full_name'));
+  for (const w of splitMulti(co.website)) row('網站', w, false, `<a class="chip" href="${esc(withScheme(w))}" target="_blank" rel="noopener">開啟</a>`);
+  if (co.domains) row('公司信箱網域', co.domains);
+  if (co.note) row('備註', co.note);
+  if (co.tags) row('標籤', co.tags);
+  return rows.join('');
+}
+
+async function onCompanyDelete(co) {
+  if (!co) return;
+  const n = Store.cardsOfCompany(co.id).length;
+  const ok = await confirmDialog({
+    title: `刪除「${companyDisplayName(co)}」的公司檔案？`,
+    message: `公司資料（在做什麼、需求產品、備註…）會從試算表刪掉。${n ? `這家公司的 ${n} 張名片不會刪，只是變成不歸屬任何公司。` : ''}`,
+    okText: '刪除',
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    await Store.removeCompany(co);
+    toast('已刪除公司檔案');
+    view.mode = 'companies';
+    go('#/');
+  } catch (err) {
+    handleError(err, '刪除失敗');
+  }
+}
+
+// ---- 編輯公司檔案 ----
+
+// 下拉選單（可以「＋ 新增選項」）；選單內容＝預設值＋所有公司填過的值
+function pickSelectHtml(name, value, field) {
+  const options = pickOptions(Store.companies, field);
+  if (value && !options.includes(value)) options.push(value);
+  return `
+    <select name="${esc(name)}" data-pick data-label="${esc(COMPANY_LABEL[field] || '選項')}" data-prev="${esc(value || '')}">
+      <option value="">（未填）</option>
+      ${options.map((o) => `<option value="${esc(o)}" ${o === value ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+      <option value="__new">＋ 新增選項…</option>
+    </select>`;
+}
+
+function productRowHtml(p = { name: '', tons: '' }) {
+  return `
+    <div class="prod-row">
+      ${pickSelectHtml('prod_name', p.name, PRODUCT_FIELD)}
+      <input class="prod-tons" name="prod_tons" value="${esc(p.tons)}" inputmode="decimal" placeholder="月用量" aria-label="月用量（噸）">
+      <span class="prod-unit">噸/月</span>
+      <button type="button" class="icon-btn prod-del" data-action="remove-product" aria-label="刪除這個產品">✕</button>
+    </div>`;
+}
+
+function renderCompanyEdit(id) {
+  const co = Store.getCompany(id);
+  $app.dataset.view = 'company-edit';
+  if (!co) {
+    $app.innerHTML = `${topbar('編輯公司檔案')}<div class="empty">找不到這個公司檔案</div>`;
+    return;
+  }
+  const auto = autoFieldSet(co);
+  const longFields = new Set(['about', 'note']);
+  const fieldHtml = ([key, label]) => {
+    const head = `<span class="field-label">${esc(label)}${auto.has(key) ? autoTag() : ''}</span>`;
+    if (PICK_FIELDS.includes(key)) return `<div class="field">${head}${pickSelectHtml(key, co[key], key)}</div>`;
+    if (longFields.has(key)) return `<label class="field">${head}<textarea name="${key}" rows="3">${esc(co[key])}</textarea></label>`;
+    const attrs = key === 'website' || key === 'domains' ? 'inputmode="url" autocapitalize="off"' : '';
+    return `<label class="field">${head}<input name="${key}" value="${esc(co[key])}" type="text" ${attrs}></label>`;
+  };
+  $app.innerHTML = `
+    ${topbar('編輯公司檔案', '<button type="button" class="topbar-action" data-action="company-save">儲存</button>')}
+    <form class="edit-form" id="company-form" data-id="${esc(co.id)}">
+      ${COMPANY_FIELDS.map((f) => fieldHtml(f) + (f[0] === 'material_source' ? `
+        <div class="field">
+          <span class="field-label">需求產品（每個產品的月用量，單位：噸/月）</span>
+          <div id="prod-list">${(co.products.length ? co.products : [undefined]).map(productRowHtml).join('')}</div>
+          <button type="button" class="btn btn-small add-prod" data-action="add-product">＋ 新增產品</button>
+        </div>` : '')).join('')}
+      <p class="muted small">標「自動產生」的是 AI 從名片和官網查的，改過就不會再標。「公司信箱網域」用來把新名片自動歸到這家公司，多個用逗號隔開。</p>
+      <button type="submit" class="btn btn-primary btn-big">儲存</button>
+    </form>`;
+  document.getElementById('company-form').addEventListener('submit', (e) => { e.preventDefault(); onCompanySave(); });
+}
+
+async function onCompanySave() {
+  const form = document.getElementById('company-form');
+  if (!form || saving) return;
+  const co = Store.getCompany(form.dataset.id);
+  if (!co) return;
+  const updated = { ...co };
+  for (const [key] of COMPANY_FIELDS) {
+    const v = (form.elements[key]?.value || '').trim();
+    updated[key] = v === '__new' ? (co[key] || '') : v;
+  }
+  updated.products = cleanProducts([...form.querySelectorAll('.prod-row')].map((rowEl) => {
+    const name = rowEl.querySelector('select').value;
+    return { name: name === '__new' ? '' : name, tons: rowEl.querySelector('.prod-tons').value };
+  }));
+  if (!updated.name && !updated.full_name) {
+    toast('公司簡稱和全名至少要填一個');
+    return;
+  }
+  // 改過的欄位就不再標「自動產生」
+  const auto = autoFieldSet(co);
+  for (const f of [...auto]) if ((updated[f] || '') !== (co[f] || '')) auto.delete(f);
+  updated.auto_fields = [...auto].join(',');
+  saving = true;
+  try {
+    await Store.updateCompany(updated);
+    toast('已儲存');
+    history.back();
+  } catch (err) {
+    handleError(err, '儲存失敗');
+  } finally {
+    saving = false;
+  }
+}
+
+// 下拉選單選了「＋ 新增選項…」→ 跳出輸入框，打的字加進這個選單並選起來（存檔後所有公司的選單都會有）
+async function onChange(e) {
+  const sel = e.target.closest('select[data-pick]');
+  if (!sel) return;
+  if (sel.value !== '__new') {
+    sel.dataset.prev = sel.value;
+    return;
+  }
+  const text = await promptDialog({ title: `新增${sel.dataset.label}`, placeholder: '輸入新的選項', okText: '加入' });
+  const v = (text || '').trim();
+  if (!v) {
+    sel.value = sel.dataset.prev || '';
+    return;
+  }
+  addOption(sel, v);
+  sel.value = v;
+  sel.dataset.prev = v;
+  // 產品名稱：其他列的選單也馬上看得到剛加的（不用等存檔）
+  if (sel.name === 'prod_name') syncProductOptions();
+}
+
+function addOption(sel, value) {
+  if (![...sel.options].some((o) => o.value === value)) {
+    sel.insertBefore(new Option(value, value), sel.querySelector('option[value="__new"]'));
+  }
+}
+
+// 需求產品每一列的選單內容對齊（新增的列也帶到這次編輯裡剛加的產品）
+function syncProductOptions() {
+  const selects = [...document.querySelectorAll('#prod-list select')];
+  const values = new Set(selects.flatMap((s) => [...s.options].map((o) => o.value)).filter((v) => v && v !== '__new'));
+  for (const s of selects) for (const v of values) addOption(s, v);
+}
+
+// ======================= 整理下拉選單 =======================
+// 打錯字、同一個東西兩種寫法 → 在這裡改名合併（全部公司一起改）
+
+function renderOptions() {
+  $app.dataset.view = 'options';
+  const fields = [...PICK_FIELDS, PRODUCT_FIELD];
+  $app.innerHTML = `
+    ${topbar('整理下拉選單')}
+    <div class="settings">
+      <p class="muted small">點一個選項可以改名（所有公司一起改），或從所有公司清掉。數字＝幾家公司在用。</p>
+      ${fields.map((f) => {
+        const counts = optionCounts(Store.companies, f);
+        const opts = pickOptions(Store.companies, f);
+        return `
+          <section class="set-group">
+            <div class="set-title">${esc(COMPANY_LABEL[f])}</div>
+            <div class="opt-chips">${opts.length
+              ? opts.map((o) => `<button type="button" class="chip" data-action="opt-edit" data-field="${f}" data-value="${esc(o)}">${esc(o)} <span class="opt-n">${counts.get(o) || 0}</span></button>`).join('')
+              : '<span class="muted small">還沒有選項（在公司編輯頁選「＋ 新增選項」就會出現在這裡）</span>'}</div>
+          </section>`;
+      }).join('')}
+    </div>`;
+}
+
+async function onOptionEdit(field, value) {
+  const n = optionCounts(Store.companies, field).get(value) || 0;
+  const choice = await actionSheet(`「${value}」（${n} 家公司在用）`, [
+    { label: '改名（所有公司一起改）', value: 'rename' },
+    { label: '從所有公司清掉', value: 'clear', danger: true },
+  ]);
+  if (!choice) return;
+  let to = '';
+  if (choice === 'rename') {
+    const input = await promptDialog({ title: `把「${value}」改成`, value, okText: '下一步' });
+    to = (input || '').trim();
+    if (!to || to === value) return;
+  }
+  const changed = renameOption(Store.companies, field, value, to);
+  if (!changed.length) {
+    toast('沒有公司在用這個選項（預設選項會一直留在選單裡）', 3500);
+    return;
+  }
+  const names = changed.slice(0, 5).map(companyDisplayName).join('、') + (changed.length > 5 ? '…' : '');
+  const ok = await confirmDialog({
+    title: choice === 'rename' ? `確定把「${value}」改成「${to}」？` : `確定從所有公司清掉「${value}」？`,
+    message: `會改到 ${changed.length} 家公司：${names}`,
+    okText: '確定',
+    danger: choice === 'clear',
+  });
+  if (!ok) return;
+  try {
+    for (const co of changed) await Store.updateCompany(co);
+    toast(`已更新 ${changed.length} 家公司`);
+  } catch (err) {
+    handleError(err, '更新失敗（可能只改了一部分，請重新整理後再看一次）');
+  }
+}
+
+// ======================= 自訂排序 =======================
+
+function saveCustomSorts() {
+  localStorage.setItem('cardbox_custom_sorts', JSON.stringify(view.customSorts));
+}
+
+function setSort(sort) {
+  view.sort = sort;
+  localStorage.setItem('cardbox_sort', sort);
+  updateListParts();
+}
+
+async function onAddSort() {
+  const available = GROUP_FIELDS.filter(([key]) => !view.customSorts.includes(key));
+  if (!available.length) {
+    toast('能加的排序都加了');
+    return;
+  }
+  const key = await actionSheet('新增排序：依哪個欄位分組？',
+    available.map(([k, label, source]) => ({ label: `${label}${source === 'company' ? '（公司檔案）' : '（名片）'}`, value: k })));
+  if (!key) return;
+  view.customSorts.push(key);
+  saveCustomSorts();
+  setSort(`group:${key}`);
+}
+
+async function onRemoveSort(sort) {
+  const key = sort.slice(6);
+  const choice = await actionSheet(`「${GROUP_LABEL[key]}」排序`, [{ label: '移除這個排序按鈕', value: 'remove', danger: true }]);
+  if (choice !== 'remove') return;
+  view.customSorts = view.customSorts.filter((k) => k !== key);
+  saveCustomSorts();
+  setSort('recent');
 }
 
 // ======================= 設定頁 =======================
@@ -668,6 +1181,10 @@ async function renderSettings() {
         <a class="set-row link" id="link-sheet" target="_blank" rel="noopener">📊 打開名片試算表 <span class="muted">（可以直接在裡面改）</span></a>
         <a class="set-row link" id="link-folder" target="_blank" rel="noopener">🗂️ 打開照片資料夾</a>
         <button type="button" class="set-row link" data-action="export-all">📇 全部匯出成通訊錄檔（${Store.cards.length} 張）</button>
+      </section>
+      <section class="set-group">
+        <div class="set-title">公司檔案</div>
+        <a class="set-row link" href="#/options">🗂️ 整理下拉選單 <span class="muted">（關係、產業、地區、產品…改名或合併）</span></a>
       </section>
       ${!isStandalone() ? `
       <section class="set-group">
@@ -747,10 +1264,34 @@ function onClick(e) {
       Store.refresh().then(() => toast('已更新')).catch((err) => handleError(err, '更新失敗'));
       break;
     case 'sort':
-      view.sort = el.dataset.sort;
-      localStorage.setItem('cardbox_sort', view.sort);
+      // 再點一次自己加的排序 → 問要不要移除
+      if (el.dataset.sort === view.sort && view.sort.startsWith('group:')) onRemoveSort(view.sort);
+      else setSort(el.dataset.sort);
+      break;
+    case 'add-sort': onAddSort(); break;
+    case 'mode':
+      view.mode = el.dataset.mode === 'companies' ? 'companies' : 'cards';
+      localStorage.setItem('cardbox_mode', view.mode);
+      renderList();
+      break;
+    case 'relation': view.relation = el.dataset.value; updateListParts(); break;
+    case 'cal-month':
+      view.month = shiftMonth(view.month, Number(el.dataset.delta));
+      view.day = '';
       updateListParts();
       break;
+    case 'cal-day':
+      view.day = el.dataset.day === view.day ? '' : el.dataset.day;
+      updateListParts();
+      break;
+    case 'company-save': onCompanySave(); break;
+    case 'company-delete': onCompanyDelete(route.name === 'company' ? Store.getCompany(route.id) : null); break;
+    case 'add-product':
+      document.getElementById('prod-list')?.insertAdjacentHTML('beforeend', productRowHtml());
+      syncProductOptions();
+      break;
+    case 'remove-product': el.closest('.prod-row')?.remove(); break;
+    case 'opt-edit': onOptionEdit(el.dataset.field, el.dataset.value); break;
     case 'camera': onCamera(); break;
     case 'album': document.getElementById('file-album').click(); break;
     case 'queue-item': onQueueItem(el.dataset.qid); break;
@@ -814,7 +1355,7 @@ async function onExportAll() {
   if (!Store.cards.length) { toast('還沒有名片'); return; }
   const d = new Date();
   const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
-  const result = await shareOrDownload(cardsToVCard(sortCards(Store.cards, 'name')), `名片盒_${stamp}.vcf`, 'text/vcard');
+  const result = await shareOrDownload(cardsToVCard(sortCards(Store.cards, 'name'), companyOf), `名片盒_${stamp}.vcf`, 'text/vcard');
   if (result === 'downloaded') toast('已下載，點開檔案就能一次匯入通訊錄', 4000);
 }
 

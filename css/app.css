@@ -221,6 +221,74 @@ button { font: inherit; color: inherit; }
 }
 .field input:focus, .field textarea:focus { border-color: var(--primary); }
 
+.field select {
+  border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 10px;
+  padding: 10px 12px; font: inherit; font-size: 16px; outline: none; width: 100%;
+}
+.field select:focus { border-color: var(--primary); }
+
+/* ---------- 名片／公司 分頁切換、排序、日曆 ---------- */
+.mode-tabs { display: flex; gap: 4px; margin-top: 8px; background: var(--line); border-radius: 12px; padding: 3px; }
+.mode-tab {
+  flex: 1; border: 0; border-radius: 10px; padding: 7px 0; background: transparent; cursor: pointer;
+  font-weight: 600; color: var(--muted);
+}
+.mode-tab.active { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
+.sort-row { overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.chip-add { font-weight: 700; color: var(--primary); }
+.group-n { font-weight: 400; margin-left: 4px; }
+.count-badge { font-size: 13px; color: var(--muted); flex: none; }
+.co-thumb { width: 40px; }
+
+.cal { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 6px 8px 10px; margin-bottom: 4px; }
+.cal-head { display: flex; align-items: center; justify-content: space-between; }
+.cal-title { font-weight: 600; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-week { text-align: center; font-size: 12px; color: var(--muted); padding: 2px 0; }
+.cal-cell {
+  position: relative; aspect-ratio: 1; border: 0; border-radius: 10px; background: transparent;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0; font-size: 15px;
+}
+.cal-cell:disabled { color: var(--muted); opacity: .55; }
+.cal-cell.has { background: var(--primary-soft); font-weight: 600; cursor: pointer; }
+.cal-cell.today .cal-num { text-decoration: underline; text-underline-offset: 3px; }
+.cal-cell.sel { background: var(--primary); color: var(--primary-text); }
+.cal-n { font-size: 11px; line-height: 1; font-weight: 400; }
+.cal-filter { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 14px; margin-top: 8px; }
+
+/* ---------- 公司檔案 ---------- */
+.auto-tag {
+  display: inline-block; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px;
+  padding: 0 5px; margin-left: 6px; vertical-align: 2px; white-space: nowrap; font-weight: 400;
+}
+.tag-soft { background: var(--primary-soft); color: var(--text); }
+.co-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.co-card {
+  display: block; background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 12px 14px; margin-bottom: 12px; border-left: 4px solid var(--primary);
+}
+.co-card-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.co-card-name { font-weight: 600; }
+.co-card-go { color: var(--primary); font-size: 14px; flex: none; }
+.co-card-full { color: var(--muted); font-size: 14px; margin-top: 2px; }
+.co-card-about { margin-top: 6px; font-size: 15px; }
+.co-card-products { margin-top: 6px; font-size: 14px; color: var(--muted); }
+.about-box { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px 14px; }
+.section-title { font-size: 13px; color: var(--muted); font-weight: 600; padding: 16px 4px 6px; }
+.prod-line { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.prod-line:last-child { border-bottom: 0; }
+.prod-total { font-weight: 600; }
+.prod-row { display: grid; grid-template-columns: 1fr 84px auto 36px; gap: 6px; align-items: center; margin-bottom: 6px; }
+.prod-row input {
+  border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 10px;
+  padding: 10px 8px; font: inherit; font-size: 16px; outline: none; width: 100%;
+}
+.prod-unit { font-size: 13px; color: var(--muted); }
+.prod-del { width: 36px; height: 36px; font-size: 16px; color: var(--muted); }
+.add-prod { align-self: flex-start; }
+.opt-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 14px 14px; }
+.opt-n { color: var(--muted); margin-left: 4px; font-size: 12px; }
+
 /* ---------- 設定頁 ---------- */
 .settings { padding: 0 16px calc(32px + var(--safe-bottom)); }
 .set-group { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 16px; overflow: hidden; }

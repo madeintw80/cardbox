@@ -44,6 +44,34 @@ export function confirmDialog({ title, message = '', okText = '確定', cancelTe
   });
 }
 
+// 輸入一行文字的對話框；回傳輸入的字（按取消＝null）
+export function promptDialog({ title, message = '', value = '', placeholder = '', okText = '確定' }) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'modal-backdrop';
+    wrap.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true">
+        <h3 class="modal-title">${esc(title)}</h3>
+        ${message ? `<p class="modal-msg">${esc(message)}</p>` : ''}
+        <div class="field"><input type="text" class="prompt-input" value="${esc(value)}" placeholder="${esc(placeholder)}"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" data-r="0">取消</button>
+          <button type="button" class="btn btn-primary" data-r="1">${esc(okText)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+    const input = wrap.querySelector('.prompt-input');
+    setTimeout(() => input.focus(), 50);
+    const done = (ok) => { const v = input.value; wrap.remove(); resolve(ok ? v : null); };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') done(true); });
+    wrap.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-r]');
+      if (btn) done(btn.dataset.r === '1');
+      else if (e.target === wrap) done(false);
+    });
+  });
+}
+
 // 底部選單：actions = [{ label, value, danger }]；回傳選到的 value（取消＝null）
 export function actionSheet(title, actions) {
   return new Promise((resolve) => {

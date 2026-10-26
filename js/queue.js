@@ -207,13 +207,15 @@ function photoFileName(ts) {
 }
 
 // 辨識完：30 分鐘內有同一人（手機或 Email 一樣）→ 合併成正反面；否則新增一張
+// 存之前先歸到公司檔案（找不到就建一個，AI 查的全名／簡介填進公司還空著的欄位）
+// 這段在 _serialSave 裡一張一張跑，同公司兩張同時辨識完也不會建出兩個公司檔案
 async function saveOcrResult(item, ocr) {
   const now = Date.now();
   const twin = Store.cards.find((c) =>
     now - new Date(c.created_at).getTime() < MERGE_WINDOW_MS && isSamePerson(c, ocr));
   if (twin) {
-    await Store.update(mergeBackSide(twin, ocr, item.photoId));
+    await Store.update(await Store.linkCompany(mergeBackSide(twin, ocr, item.photoId), ocr.auto));
   } else {
-    await Store.add(makeCardFromOcr(ocr, item.photoId));
+    await Store.add(await Store.linkCompany(makeCardFromOcr(ocr, item.photoId), ocr.auto));
   }
 }

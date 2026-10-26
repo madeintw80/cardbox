@@ -1,7 +1,7 @@
 // 名片盒 CardBox — 全域設定
 // 升版時要同步三個地方：這裡的 VERSION、sw.js 的 CACHE、index.html 與 sw.js 裡所有 ?v=
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.3.0';
 
 // Google OAuth Client ID（公開值，不是機密）：沿用 BroTrip 的 Google 專案（2026-10-08 Boss 拍板）
 // 已授權網址＝https://madeintw80.github.io（同一個網域下的 /cardbox/ 直接能用）
@@ -22,6 +22,7 @@ export const GOOGLE_SCOPES = [
 export const ROOT_FOLDER_NAME = '名片盒 CardBox';
 export const SHEET_NAME = '名片盒資料';
 export const SHEET_TAB = 'Cards';
+export const COMPANY_TAB = 'Companies'; // 公司檔案（v0.3.0 起；舊試算表打開時自動補上這個分頁）
 
 // 照片壓縮：長邊最多 1600px（Claude 讀圖建議上限附近，字夠清楚又不浪費）
 export const IMAGE_MAX_SIDE = 1600;
