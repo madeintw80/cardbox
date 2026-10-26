@@ -44,6 +44,32 @@ export function canvasToBlob(canvas, quality = IMAGE_QUALITY) {
   });
 }
 
+// 名片兩面上下拼成一張（中間灰色分隔帶），送去辨識用；存到雲端的照片還是分開的兩張
+// 為什麼拼起來：收件櫃一件只收一張圖，拼起來 Claude 一次看到兩面、一起判斷（公司名可能只印在背面）
+const STITCH_WIDTH = 1200;   // 每一面縮到這個寬度（名片字夠清楚）
+const STITCH_MAX_SIDE = 2000;
+const STITCH_BAND = 24;
+
+export async function stitchSides(blobs) {
+  const list = blobs.filter(Boolean).slice(0, 2);
+  if (list.length < 2) return list[0];
+  const bmps = await Promise.all(list.map(loadBitmap));
+  const width = Math.min(STITCH_WIDTH, Math.max(...bmps.map((b) => b.width)));
+  const heights = bmps.map((b) => Math.round(b.height * (width / b.width)));
+  const total = heights[0] + STITCH_BAND + heights[1];
+  const shrink = Math.min(1, STITCH_MAX_SIDE / Math.max(width, total));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(width * shrink);
+  canvas.height = Math.round(total * shrink);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#c8c8c8'; // 分隔帶的灰色（也是背景）
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bmps[0], 0, 0, canvas.width, Math.round(heights[0] * shrink));
+  ctx.drawImage(bmps[1], 0, Math.round((heights[0] + STITCH_BAND) * shrink), canvas.width, Math.round(heights[1] * shrink));
+  for (const b of bmps) if (b.close) b.close();
+  return canvasToBlob(canvas, 0.88);
+}
+
 // 列表用的小縮圖
 export function makeThumb(blob) {
   return resizeImage(blob, THUMB_MAX_SIDE, 0.7);

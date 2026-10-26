@@ -116,7 +116,7 @@ button { font: inherit; color: inherit; }
   background: var(--warn-soft);
 }
 
-.list { padding: 0 16px calc(96px + var(--safe-bottom)); }
+.list { padding: 0 16px calc(136px + var(--safe-bottom)); }
 .group-head { font-size: 13px; color: var(--muted); padding: 14px 4px 6px; font-weight: 600; }
 .card-item {
   display: flex; align-items: center; gap: 12px; background: var(--card); border-radius: var(--radius);
@@ -166,6 +166,10 @@ button { font: inherit; color: inherit; }
   max-width: 640px; margin: 0 auto;
 }
 .bottom-btn { flex: 1; padding: 14px 8px; font-size: 16px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15); }
+.bottom-bar { flex-direction: column; gap: 8px; }
+.bottom-btns { display: flex; gap: 10px; }
+.sides-row { display: flex; gap: 6px; justify-content: center; }
+.sides-row .chip { font-size: 13px; padding: 3px 10px; box-shadow: var(--shadow); }
 
 /* ---------- 詳細頁 ---------- */
 .topbar {
@@ -313,6 +317,7 @@ button { font: inherit; color: inherit; }
   padding: 20px 24px calc(24px + var(--safe-bottom));
 }
 .camera-btn { border: 0; background: rgba(255,255,255,.18); color: #fff; padding: 10px 16px; border-radius: 12px; font-weight: 600; min-width: 84px; }
+.camera-mode { position: absolute; top: calc(52px + var(--safe-top)); left: 50%; transform: translateX(-50%); font-size: 14px; white-space: nowrap; }
 .camera-btn:disabled { opacity: .4; }
 .camera-done:not(:disabled) { background: #14b8a6; }
 .camera-shutter { width: 72px; height: 72px; border-radius: 50%; border: 5px solid #fff; background: rgba(255,255,255,.35); cursor: pointer; }
@@ -362,7 +367,7 @@ button { font: inherit; color: inherit; }
 .diff-new { color: var(--primary); word-break: break-word; }
 
 #toast {
-  position: fixed; left: 50%; bottom: calc(96px + var(--safe-bottom)); transform: translate(-50%, 20px);
+  position: fixed; left: 50%; bottom: calc(132px + var(--safe-bottom)); transform: translate(-50%, 20px);
   background: rgba(17, 24, 39, 0.92); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 15px;
   max-width: calc(100% - 32px); width: max-content; opacity: 0; pointer-events: none; transition: all .2s; z-index: 300;
   text-align: center;

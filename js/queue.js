@@ -1,9 +1,10 @@
 // 上傳＋辨識排隊：拍照／選相簿的照片先放進手機本機佇列，再一張張「上傳 Drive → AI 辨識 → 寫進 Sheet」
 // 為什麼要排隊：一次選 50 張不能同時丟，會撞中繼站上限；而且中途關 App，下次打開會接著做
+// 一個排隊項目＝一張名片：單面 1 張照片、雙面 2 張（正面＋背面，辨識時拼成一張圖一起看）
 
 import { QUEUE_CONCURRENCY } from './config.js';
 import { queueDb, thumbDb } from './localdb.js';
-import { resizeImage, makeThumb } from './image.js';
+import { resizeImage, makeThumb, stitchSides } from './image.js';
 import { recognizeCard } from './ocr.js';
 import { Store, backend } from './store.js';
 import { makeCardFromOcr, mergeBackSide, isSamePerson } from './cards.js';
@@ -14,8 +15,17 @@ const MERGE_WINDOW_MS = 30 * 60 * 1000; // 30 分鐘內拍的同一人（手機�
 const listeners = new Set();
 let saveChain = Promise.resolve(); // 寫進 Sheet 要「一張一張來」，正反面才不會同時各建一張
 
+// v0.3.1 以前存在手機裡的排隊項目只有一張照片（blob／photoId）→ 換成陣列格式
+function normalizeItem(item) {
+  if (!item.blobs) item.blobs = item.blob ? [item.blob] : [];
+  if (!item.photoIds) item.photoIds = item.photoId ? [item.photoId] : [];
+  delete item.blob;
+  delete item.photoId;
+  return item;
+}
+
 export const Queue = {
-  items: [],   // { qid, blob, thumb, createdAt, state: queued|working|error, step, error, retryable, tries, photoId, jobId }
+  items: [],   // { qid, blobs: [正面, 背面?], thumb, createdAt, state: queued|working|error, step, error, retryable, tries, photoIds, jobId }
   running: 0,
   paused: false, // 登入過期時暫停，重新登入後繼續
 
@@ -29,7 +39,7 @@ export const Queue = {
 
   // App 打開時：把上次沒做完的撿回來繼續
   async init() {
-    this.items = await queueDb.all();
+    this.items = (await queueDb.all()).map(normalizeItem);
     for (const item of this.items) {
       if (item.state === 'working') item.state = 'queued'; // 上次做到一半被關掉
     }
@@ -37,26 +47,32 @@ export const Queue = {
     this.pump();
   },
 
-  // 加入照片（相機拍的或相簿選的都走這裡）
-  async addFiles(files) {
+  // 加入照片：每張照片各是一張名片（單面）
+  addFiles(files) {
+    return this.addCards([...files].map((f) => [f]));
+  },
+
+  // 加入名片：groups＝[[正面], [正面, 背面], …]；回傳成功加入幾張名片
+  async addCards(groups) {
     let added = 0;
     const base = Date.now();
-    for (const [i, file] of [...files].entries()) {
+    for (const [i, group] of groups.entries()) {
       try {
-        const blob = await resizeImage(file);
-        const thumb = await makeThumb(blob);
+        const blobs = [];
+        for (const file of group.slice(0, 2)) blobs.push(await resizeImage(file));
+        const thumb = await makeThumb(blobs[0]);
         const item = {
           qid: `q_${base.toString(36)}_${i}_${Math.random().toString(36).slice(2, 6)}`,
-          blob, thumb,
+          blobs, thumb,
           createdAt: base + i,
-          state: 'queued', step: '', error: '', retryable: true, tries: 0, photoId: '', jobId: '',
+          state: 'queued', step: '', error: '', retryable: true, tries: 0, photoIds: [], jobId: '',
         };
         await queueDb.put(item);
         this.items.push(item);
         added += 1;
         this.emit();
       } catch (err) {
-        console.warn('add file failed', err);
+        console.warn('add card failed', err);
       }
     }
     this.pump();
@@ -72,23 +88,31 @@ export const Queue = {
     }
   },
 
+  // 照片上傳到她的 Drive（上傳過的就不重傳；雙面的背面檔名多一個 _b）
+  async _upload(item) {
+    for (const [i, blob] of item.blobs.entries()) {
+      if (item.photoIds[i]) continue;
+      item.photoIds[i] = await backend.uploadPhoto(blob, photoFileName(item.createdAt, i));
+      await queueDb.put(item);
+    }
+  },
+
   async _run(item) {
     this.running += 1;
     item.state = 'working';
     item.error = '';
     this.emit();
     try {
-      // 1) 照片先上傳到她的 Drive（上傳過就不重傳）
-      if (!item.photoId) {
+      // 1) 照片先上傳到她的 Drive
+      if (item.photoIds.length < item.blobs.length) {
         item.step = '上傳中';
         this.emit();
-        item.photoId = await backend.uploadPhoto(item.blob, photoFileName(item.createdAt));
-        await queueDb.put(item);
+        await this._upload(item);
       }
-      // 2) 放進收件櫃，等 Boss 電腦上的 Claude 讀（件號記在 item.jobId，重試時接著等同一件）
+      // 2) 放進收件櫃，等 Boss 電腦上的 Claude 讀（雙面就拼成一張一起讀；件號記在 item.jobId，重試時接著等同一件）
       item.step = '送出中';
       this.emit();
-      const ocr = await recognizeCard(item.blob, {
+      const ocr = await recognizeCard(await stitchSides(item.blobs), {
         jobId: item.jobId || '',
         onJob: (id) => { item.jobId = id; queueDb.put(item).catch(() => {}); },
         onStatus: (s) => {
@@ -106,7 +130,7 @@ export const Queue = {
       item.step = '儲存中';
       this.emit();
       await this._serialSave(() => saveOcrResult(item, ocr));
-      await thumbDb.put(item.photoId, item.thumb).catch(() => {});
+      await thumbDb.put(item.photoIds[0], item.thumb).catch(() => {});
       await this._drop(item);
     } catch (err) {
       item.state = 'error';
@@ -170,10 +194,10 @@ export const Queue = {
     item.step = '儲存中';
     this.emit();
     try {
-      if (!item.photoId) item.photoId = await backend.uploadPhoto(item.blob, photoFileName(item.createdAt));
-      const card = makeCardFromOcr({}, item.photoId);
+      await this._upload(item);
+      const card = { ...makeCardFromOcr({}, item.photoIds[0]), photos: [...item.photoIds] };
       await this._serialSave(() => Store.add(card));
-      await thumbDb.put(item.photoId, item.thumb).catch(() => {});
+      await thumbDb.put(item.photoIds[0], item.thumb).catch(() => {});
       await this._drop(item);
       return card;
     } catch (err) {
@@ -198,12 +222,12 @@ export const Queue = {
   },
 };
 
-// 照片檔名：card_20261008_141230_123.jpg（看 Drive 資料夾時一眼知道哪天拍的）
-function photoFileName(ts) {
+// 照片檔名：card_20261008_141230_123.jpg（看 Drive 資料夾時一眼知道哪天拍的；背面多 _b）
+export function photoFileName(ts, side = 0) {
   const d = new Date(ts);
   const pad = (n, w = 2) => String(n).padStart(w, '0');
   return `card_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_`
-    + `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}_${pad(d.getMilliseconds(), 3)}.jpg`;
+    + `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}_${pad(d.getMilliseconds(), 3)}${side ? '_b' : ''}.jpg`;
 }
 
 // 辨識完：30 分鐘內有同一人（手機或 Email 一樣）→ 合併成正反面；否則新增一張
@@ -211,11 +235,12 @@ function photoFileName(ts) {
 // 這段在 _serialSave 裡一張一張跑，同公司兩張同時辨識完也不會建出兩個公司檔案
 async function saveOcrResult(item, ocr) {
   const now = Date.now();
+  const [first, ...rest] = item.photoIds;
   const twin = Store.cards.find((c) =>
     now - new Date(c.created_at).getTime() < MERGE_WINDOW_MS && isSamePerson(c, ocr));
-  if (twin) {
-    await Store.update(await Store.linkCompany(mergeBackSide(twin, ocr, item.photoId), ocr.auto));
-  } else {
-    await Store.add(await Store.linkCompany(makeCardFromOcr(ocr, item.photoId), ocr.auto));
-  }
+  let card = twin ? mergeBackSide(twin, ocr, first) : makeCardFromOcr(ocr, first);
+  for (const id of rest) if (!card.photos.includes(id)) card = { ...card, photos: [...card.photos, id] };
+  card = await Store.linkCompany(card, ocr.auto);
+  if (twin) await Store.update(card);
+  else await Store.add(card);
 }

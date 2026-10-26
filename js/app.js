@@ -11,9 +11,9 @@
 import { VERSION, DEMO_MODE } from './config.js';
 import { Auth } from './auth.js';
 import { Store, backend } from './store.js';
-import { Queue } from './queue.js';
+import { Queue, photoFileName } from './queue.js';
 import { thumbDb, clearAllLocal } from './localdb.js';
-import { makeThumb } from './image.js';
+import { makeThumb, resizeImage, stitchSides } from './image.js';
 import { recognizeCard } from './ocr.js';
 import { openCamera, cameraSupported } from './camera.js';
 import {
@@ -53,6 +53,7 @@ const view = {
   month: '',      // 日曆正在看哪個月（"2026-10"；空白＝最新名片那個月）
   day: '',        // 日曆點選的那一天（空白＝整個月）
   relation: '',   // 公司分頁：只看某種關係（空白＝全部）
+  sides: localStorage.getItem('cardbox_sides') === '2' ? 2 : 1, // 拍名片：單面或雙面（正面＋背面）
   listScroll: 0,
 };
 if (view.sort.startsWith('group:') && !view.customSorts.includes(view.sort.slice(6))) view.sort = 'recent';
@@ -244,10 +245,26 @@ function renderList() {
     <section id="queue-box"></section>
     <main id="list-body" class="list"></main>
     <nav class="bottom-bar">
-      <button type="button" class="btn btn-primary bottom-btn" data-action="camera">📷 拍名片</button>
-      <button type="button" class="btn btn-secondary bottom-btn" data-action="album">🖼 從相簿選</button>
+      <div class="sides-row" id="sides-row">${sidesToggleHtml()}</div>
+      <div class="bottom-btns">
+        <button type="button" class="btn btn-primary bottom-btn" data-action="camera">📷 拍名片</button>
+        <button type="button" class="btn btn-secondary bottom-btn" data-action="album">🖼 從相簿選</button>
+      </div>
     </nav>`;
   updateListParts();
+}
+
+// 單面／雙面切換（拍照和選相簿都照這個）：雙面＝每張名片兩張照片（正面＋背面），一起辨識
+function sidesToggleHtml() {
+  return [[1, '單面'], [2, '雙面（正面＋背面）']].map(([n, label]) =>
+    `<button type="button" class="chip ${view.sides === n ? 'active' : ''}" data-action="sides" data-sides="${n}">${label}</button>`).join('');
+}
+
+function setSides(n) {
+  view.sides = n === 2 ? 2 : 1;
+  localStorage.setItem('cardbox_sides', String(view.sides));
+  const row = document.getElementById('sides-row');
+  if (row) row.innerHTML = sidesToggleHtml();
 }
 
 function updateListParts() {
@@ -611,6 +628,7 @@ function renderDetail(id) {
       </div>
       <div class="detail-actions">
         <button type="button" class="btn btn-secondary" data-action="vcard">📇 加入手機通訊錄</button>
+        ${card.photos.length < 2 ? `<button type="button" class="btn btn-secondary" data-action="add-side">➕ 補上${card.photos.length ? '另一面' : ''}照片 <span class="muted small">（兩面一起判斷）</span></button>` : ''}
         ${card.photos.length ? '<button type="button" class="btn btn-ghost" data-action="reocr">🔄 重新辨識</button>' : ''}
         <button type="button" class="btn btn-ghost danger-text" data-action="delete">🗑 刪除名片</button>
       </div>
@@ -708,23 +726,74 @@ async function onVCard(card) {
   }
 }
 
+// 送去辨識的圖：有正反兩面就上下拼成一張，讓 AI 一起看（公司名可能只印在背面）
+async function cardRecognitionBlob(card) {
+  const blobs = await Promise.all(card.photos.slice(0, 2).map((id) => backend.getPhoto(id)));
+  return stitchSides(blobs);
+}
+
 // 重新辨識：先給她看「哪些欄位會變」，勾選後才套用（不會偷偷蓋掉她改過的資料）
 async function onReOcr(card) {
+  const twoSides = card.photos.length > 1;
   const ok = await confirmDialog({
     title: '重新辨識這張名片？',
-    message: '會用正面照片重新請 AI 讀一次，讀完先給你看差異，你決定要套用哪些欄位。',
+    message: `會用${twoSides ? '正反兩面照片' : '正面照片'}重新請 AI 讀一次，讀完先給你看差異，你決定要套用哪些欄位。`,
     okText: '開始',
   });
   if (!ok) return;
-  toast('重新辨識中…（約 10 秒）', 10000);
+  toast(`重新辨識中…（約 ${twoSides ? 15 : 10} 秒）`, 15000);
   let ocr;
   try {
-    const blob = await backend.getPhoto(card.photos[0]);
-    ocr = await recognizeCard(blob);
+    ocr = await recognizeCard(await cardRecognitionBlob(card));
   } catch (err) {
     handleError(err, '重新辨識失敗');
     return;
   }
+  await applyOcrResult(card, ocr);
+}
+
+// 打開手機的選照片視窗（iPhone／Android 都會讓她選「拍照」或「從相簿」）；沒選就不會回來
+// 要在按鈕的 click 裡「同步」呼叫，手機才肯打開
+function pickImageFile() {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.addEventListener('change', () => resolve(input.files?.[0] || null), { once: true });
+    input.click();
+  });
+}
+
+// 名片只有一面 → 補上另一面的照片，兩面一起重新判斷（例如公司名只印在背面）
+async function onAddSide(card) {
+  const file = await pickImageFile();
+  if (!file) return;
+  toast('上傳照片中…', 15000);
+  let blob;
+  let current;
+  try {
+    blob = await resizeImage(file);
+    const photoId = await backend.uploadPhoto(blob, photoFileName(Date.now(), 1));
+    // 照片先存進名片（等一下辨識失敗也不會掉）
+    current = await Store.update({ ...Store.get(card.id), photos: [...card.photos, photoId] });
+  } catch (err) {
+    handleError(err, '補照片失敗');
+    return;
+  }
+  toast('兩面一起辨識中…（約 15 秒）', 20000);
+  let ocr;
+  try {
+    const front = card.photos[0] ? await backend.getPhoto(card.photos[0]) : null;
+    ocr = await recognizeCard(await stitchSides([front, blob]));
+  } catch (err) {
+    handleError(err, '照片已經補上了，但辨識失敗，可以再按「重新辨識」');
+    return;
+  }
+  await applyOcrResult(current, ocr);
+}
+
+// 辨識結果 → 列出會變的欄位讓她勾選要套用哪些，再順便補公司檔案
+async function applyOcrResult(card, ocr) {
   const changes = OCR_FIELDS.filter((f) => ocr[f] && ocr[f] !== card[f]);
   if (!changes.length) {
     // 名片沒變，但可能還沒有公司檔案（v0.3.0 以前拍的）→ 補建
@@ -1127,7 +1196,7 @@ async function onBackfillCompanies() {
         const known = matchCompany(card, Store.companies);
         const auto = known && (known.full_name || known.about)
           ? {}
-          : (await recognizeCard(await backend.getPhoto(card.photos[0]))).auto;
+          : (await recognizeCard(await cardRecognitionBlob(card))).auto;
         const result = await Store.linkCompany(card, auto);
         if (!result.company_id) {
           skipped += 1;
@@ -1382,6 +1451,8 @@ function onClick(e) {
     case 'remove-product': el.closest('.prod-row')?.remove(); break;
     case 'opt-edit': onOptionEdit(el.dataset.field, el.dataset.value); break;
     case 'backfill': onBackfillCompanies(); break;
+    case 'sides': setSides(Number(el.dataset.sides)); break;
+    case 'add-side': if (card) onAddSide(card); break;
     case 'camera': onCamera(); break;
     case 'album': document.getElementById('file-album').click(); break;
     case 'queue-item': onQueueItem(el.dataset.qid); break;
@@ -1418,11 +1489,11 @@ async function onCamera() {
     return;
   }
   try {
-    await openCamera(async (blobs) => {
-      if (!blobs.length) return;
-      const n = await Queue.addFiles(blobs);
-      toast(`已加入 ${n} 張，開始辨識`);
-    });
+    await openCamera(async (groups) => {
+      if (!groups.length) return;
+      const n = await Queue.addCards(groups);
+      toast(`已加入 ${n} 張名片，開始辨識`);
+    }, { sides: view.sides, onModeChange: setSides });
   } catch (err) {
     console.warn('camera failed', err);
     toast('打不開相機（可能沒有允許相機權限），改用系統相機', 3500);
@@ -1434,9 +1505,14 @@ async function onFilesPicked(e) {
   const files = [...(e.target.files || [])].filter((f) => f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name));
   e.target.value = ''; // 清空，下次選同一張也會觸發
   if (!files.length) return;
+  // 雙面模式選相簿：照選的順序兩兩一組（第 1、2 張＝第一張名片的正、反面…），單數的最後一張算單面
+  const paired = view.sides === 2 && e.target.id === 'file-album';
+  const groups = [];
+  for (let i = 0; i < files.length; i += paired ? 2 : 1) groups.push(files.slice(i, i + (paired ? 2 : 1)));
   toast(`處理 ${files.length} 張照片中…`);
-  const n = await Queue.addFiles(files);
-  if (n < files.length) toast(`已加入 ${n} 張（${files.length - n} 張讀不了，可能是不支援的格式）`, 4000);
+  const n = await Queue.addCards(groups);
+  if (n < groups.length) toast(`已加入 ${n} 張名片（${groups.length - n} 張讀不了，可能是不支援的格式）`, 4000);
+  else if (paired) toast(`已加入 ${n} 張名片（照選的順序兩張一組：正面、背面），開始辨識`, 4000);
   else toast(`已加入 ${n} 張，開始辨識`);
   if (parseRoute().name !== 'list') go('#/');
 }
