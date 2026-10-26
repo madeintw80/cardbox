@@ -24,12 +24,14 @@ export const COLUMNS = [
   'status',      // ok｜error
   'raw_text',    // 名片上全部文字（給搜尋和對照用）
   'company_id',  // 屬於哪個公司檔案（Companies 分頁的 id；空白＝不歸屬）
+  'nationality', // 國籍（她自己選；AI 不猜——名片只看得出公司在哪，看不出人是哪國人）
 ];
 
 // 畫面上可編輯的欄位（含中文標籤）；順序＝編輯表單的順序
 export const EDITABLE_FIELDS = [
   ['name', '姓名'],
   ['name_alt', '其他語言姓名'],
+  ['nationality', '國籍'],
   ['company', '公司'],
   ['department', '部門'],
   ['title', '職稱'],
@@ -115,6 +117,7 @@ export function makeCardFromOcr(ocr, photoId, now = new Date()) {
     photos: photoId ? [photoId] : [],
     status: 'ok',
     company_id: '',
+    nationality: '',
   };
   for (const f of OCR_FIELDS) card[f] = ocr[f] || '';
   card.raw_text = ocr.raw_text || '';
@@ -204,7 +207,7 @@ function searchText(card, company) {
   const parts = [
     card.name, card.name_alt, card.company, card.department, card.title,
     card.mobile, card.phone, card.fax, card.email, card.website,
-    card.address, card.social, card.note, card.tags, card.raw_text,
+    card.address, card.social, card.note, card.tags, card.raw_text, card.nationality,
     normalizePhone(card.mobile), normalizePhone(card.phone),
   ];
   if (company) parts.push(companySearchText(company));
@@ -279,6 +282,7 @@ export function cardToVCard(card, company = null) {
   const fullName = cleanFullName(company?.full_name);
   const notes = [
     card.note,
+    card.nationality && `國籍：${card.nationality}`,
     fullName && fullName !== card.company && `公司全名：${fullName}`,
     card.social && `社群：${card.social}`,
     card.tags && `標籤：${card.tags}`,
@@ -356,6 +360,8 @@ export const PICK_DEFAULTS = {
   sales_type: ['內銷', '外銷', '內外銷'],
 };
 export const PRODUCT_FIELD = 'product'; // 「需求產品」的產品名稱也是下拉選單（選單整理頁用這個代號）
+// 名片（個人）上的下拉選單欄位：選單內容＝所有名片填過的值
+export const CARD_PICK_FIELDS = ['nationality'];
 
 // AI 草稿：公司檔案欄位 ← 辨識主機回傳的欄位
 export const AUTO_FIELD_MAP = {
@@ -623,6 +629,7 @@ export const GROUP_FIELDS = [
   ['sales_type', '內外銷', 'company'],
   ['material_source', '材料來源', 'company'],
   [PRODUCT_FIELD, '需求產品', 'company'],
+  ['nationality', '國籍', 'card'],
   ['tags', '標籤', 'card'],
   ['title', '職稱', 'card'],
   ['department', '部門', 'card'],

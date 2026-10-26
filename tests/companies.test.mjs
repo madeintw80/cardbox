@@ -142,6 +142,17 @@ test('通訊錄：公司欄照名片印的，全名寫進備註（待確認的�
   assert.ok(!vcf.includes('待確認'));
 });
 
+test('國籍（個人欄位）：存得回來、搜得到、能分組、選單用名片填過的值、寫進通訊錄備註', () => {
+  const card = { ...makeCardFromOcr(greifOcr, 'p1', NOW), nationality: '印度', note: '不吃牛' };
+  assert.equal(rowToCard(cardToRow(card), 2).nationality, '印度');
+  assert.equal(rowToCard(cardToRow(card).slice(0, 21), 2).nationality, '', 'v0.3.0 的 21 欄資料讀進來國籍是空白');
+  const other = { id: 'x', name: '李', nationality: '日本' };
+  assert.deepEqual(searchCards([card, other], '印度').map((c) => c.name), ['Alex Chen']);
+  assert.deepEqual(groupCards([card, other], 'nationality').map(([g]) => g).sort(), ['印度', '日本']);
+  assert.deepEqual(pickOptions([card, other, { nationality: '印度' }], 'nationality'), ['印度', '日本']);
+  assert.ok(cardToVCard(card).includes('國籍：印度'));
+});
+
 test('日曆：用手機當地日期分組、月曆格子從星期日開始', () => {
   assert.equal(localDayKey('2026-10-26T16:46:03.507Z'), '2026-10-27'); // 台灣時間 10/27 00:46（測試要用 TZ=Asia/Taipei 跑）
   assert.equal(localDayKey('壞掉的'), '');

@@ -19,6 +19,8 @@
 | 9 | AI 簡介（v0.3.0） | 查全名時順便寫一句白話「在做什麼」＋產業類別＋地區，標「自動產生」、她改過就不再標；同一家公司只查一次（辨識主機本機快取） |
 | 10 | 公司欄位（v0.3.0） | 關係（預設貿易商／直接用戶）、產業類別、地區、內外銷、材料來源都是下拉選單，可「＋ 新增選項」，填過的值自動變成選項；需求產品一列一個產品＋月用量（噸/月） |
 | 11 | 排序（v0.3.0） | 加「📅 日曆」看哪天加入的名片；排序列的「＋」可以自己新增依某欄位分組的排序 |
+| 12 | 國籍（v0.3.1） | 每張名片（個人）一個「國籍」下拉選單＋新增選項，由使用者自己選，AI 不猜（名片只看得出公司在哪，看不出人是哪國人，靠名字猜容易錯又變刻板印象）；飲食禁忌、宗教習慣等特殊需求寫在備註 |
+| 13 | 補查公司檔案（v0.3.1） | 設定頁按鈕：v0.3.0 以前拍的名片（或公司全名、簡介都空著的）把照片重新交給辨識主機，只拿公司檔案草稿、名片欄位不動；同公司已經查好的直接歸過去不重讀；資料在各自的雲端，誰的帳號按就補誰的 |
 
 替 Boss 決定的小事：App 名稱「名片盒」、單一 public repo（程式碼不含任何個資）、正反面自動合併（30 分鐘內手機或 Email 相同）、中文優先、重新辨識先看差異再套用、刪除時照片進雲端垃圾桶（不永久刪除）、每帳號每日 200 張上限、拿件小程式同時讀 2 張。v0.3.0 起：材料來源和內外銷是公司層級（不是每個產品各一個）；匯出通訊錄的「公司」照名片印的、公司全名寫進備註；刪公司檔案不刪名片；自訂排序存在手機本機（不同步到別台）；選單整理在「設定 → 整理下拉選單」，改名會先列出影響哪些公司再確認。
 
@@ -58,7 +60,7 @@
 
 ## Sheet 欄位（只能往後加）
 
-**Cards 分頁**（一張名片一列）：`id, created_at, updated_at, name, name_alt, company, department, title, mobile, phone, fax, email, website, address, social, note, tags, photos(JSON), status, raw_text, company_id`（`company_id` 是 v0.3.0 加的第 21 欄）
+**Cards 分頁**（一張名片一列）：`id, created_at, updated_at, name, name_alt, company, department, title, mobile, phone, fax, email, website, address, social, note, tags, photos(JSON), status, raw_text, company_id, nationality`（`company_id` 是 v0.3.0 加的第 21 欄、`nationality` 是 v0.3.1 加的第 22 欄）
 
 **Companies 分頁**（一家公司一列，v0.3.0 起）：`id, created_at, updated_at, name, full_name, about, industry, relation, region, sales_type, material_source, products(JSON：[{name, tons}]), website, domains, note, tags, auto_fields`（`auto_fields`＝還沒被人改過的 AI 欄位，畫面標「自動產生」）
 
@@ -97,7 +99,8 @@
 
 ## 驗證狀態（2026-10-27，v0.3.0）
 
-- ✅ 單元測試 30/30：`node --test tests/cards.test.mjs tests/companies.test.mjs tests/google.test.mjs`（日曆那題要在台灣時區跑：前面加 `TZ=Asia/Taipei`）
+- ✅ v0.3.1（2026-10-27）：單元測試 31/31（多國籍一題）；試玩模式驗過國籍「＋ 新增選項」→ 名片頁顯示 🌏、別張名片選單自動出現、整理選單頁有「國籍（名片）」；補查按鈕驗過刪掉公司檔案的舊名片會重建並補上簡介、查不到的分開報
+- ✅ v0.3.0 單元測試 30/30：`node --test tests/cards.test.mjs tests/companies.test.mjs tests/google.test.mjs`（日曆那題要在台灣時區跑：前面加 `TZ=Asia/Taipei`）
 - ✅ 假 Google API 模擬 v0.2.0 舊試算表：自動補 Companies 分頁＋兩個分頁標題、舊名片那一列不動、第二次打開不重建、公司增刪改寫對列
 - ✅ 試玩模式端到端（v0.3.0）：6 張照片 → 5 張名片（正反面合併）＋4 個公司檔案（不同子網域的同公司歸成一家）；日曆（月份切換、點日期篩選）、自訂排序「＋地區」、公司清單＋關係篩選、搜「鋼桶」靠公司簡介找到人、名片改歸屬、公司編輯（新增下拉選項、需求產品兩列、改過的欄位拿掉「自動產生」）、整理選單改名（先列影響公司再確認）；瀏覽器零錯誤
 - ✅ 公司檔案草稿真 Claude 實測：GREIF → Greif, Inc.／工業包裝／美國（看了官網，8.7 秒）；台積電 → 台灣積體電路製造股份有限公司／半導體／新竹市（7.7 秒）；同公司第二張走快取 0 秒；內網防護擋下 localhost／區網／Tailscale／雲端內部位址

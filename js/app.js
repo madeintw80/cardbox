@@ -19,8 +19,9 @@ import { openCamera, cameraSupported } from './camera.js';
 import {
   EDITABLE_FIELDS, OCR_FIELDS, searchCards, sortCards, avatarText,
   cardToVCard, cardsToVCard, splitMulti, withScheme, telHref,
-  COMPANY_FIELDS, PICK_FIELDS, PRODUCT_FIELD, GROUP_FIELDS, UNGROUPED,
+  COMPANY_FIELDS, PICK_FIELDS, PRODUCT_FIELD, CARD_PICK_FIELDS, GROUP_FIELDS, UNGROUPED,
   companyDisplayName, cleanFullName, autoFieldSet, totalTons, cleanProducts, makeCompanyFromCard,
+  matchCompany, cardDomains,
   searchCompanies, sortCompanies, pickOptions, optionCounts, renameOption, groupCards,
   localDayKey, monthGrid, shiftMonth,
 } from './cards.js';
@@ -600,6 +601,7 @@ function renderDetail(id) {
       <div class="person">
         <h1>${esc(name)}</h1>
         ${card.name && card.name_alt ? `<div class="person-alt">${esc(card.name_alt)}</div>` : ''}
+        ${card.nationality ? `<div class="co-chips"><span class="tag tag-soft">🌏 ${esc(card.nationality)}</span></div>` : ''}
         ${role ? `<div class="person-role">${esc(role)}</div>` : ''}
         ${card.company ? `<div class="person-company">${esc(card.company)}</div>` : ''}
       </div>
@@ -789,14 +791,18 @@ function renderEdit(id) {
     ${topbar('編輯名片', '<button type="button" class="topbar-action" data-action="save">儲存</button>')}
     <form class="edit-form" id="edit-form" data-id="${esc(card.id)}">
       ${card.photos[0] ? `<button type="button" class="edit-photo photo" data-action="view-photo" data-photo="${esc(card.photos[0])}"><img data-full="${esc(card.photos[0])}" alt="名片照片"></button>` : ''}
-      ${EDITABLE_FIELDS.map(([key, label]) => `
+      ${EDITABLE_FIELDS.map(([key, label]) => (CARD_PICK_FIELDS.includes(key) ? `
+        <div class="field">
+          <span class="field-label">${esc(label)}</span>
+          ${pickSelectHtml(key, card[key], key, Store.cards)}
+        </div>` : `
         <label class="field">
           <span class="field-label">${esc(label)}</span>
           ${longFields.has(key)
             ? `<textarea name="${key}" rows="${key === 'note' ? 3 : 2}">${esc(card[key])}</textarea>`
             : `<input name="${key}" value="${esc(card[key])}" ${fieldInputAttrs(key)}>`}
-        </label>${key === 'company' ? companySelectHtml(card) : ''}`).join('')}
-      <p class="muted small">多個電話或 Email 用逗號「,」隔開；標籤也用逗號隔開（例：客戶, 展覽）</p>
+        </label>`) + (key === 'company' ? companySelectHtml(card) : '')).join('')}
+      <p class="muted small">多個電話或 Email 用逗號「,」隔開；標籤也用逗號隔開（例：客戶, 展覽）。飲食禁忌、宗教習慣這類特殊需求寫在「備註」。</p>
       <button type="submit" class="btn btn-primary btn-big">儲存</button>
     </form>`;
   hydrateImages($app);
@@ -833,7 +839,10 @@ async function onSave() {
   const card = Store.get(form.dataset.id);
   if (!card) return;
   const updated = { ...card };
-  for (const [key] of EDITABLE_FIELDS) updated[key] = (form.elements[key]?.value || '').trim();
+  for (const [key] of EDITABLE_FIELDS) {
+    const v = (form.elements[key]?.value || '').trim();
+    updated[key] = v === '__new' ? (card[key] || '') : v; // 下拉選單停在「＋ 新增選項」沒打字 → 維持原值
+  }
   updated.status = 'ok';
   const pickedCompany = form.elements.company_id?.value ?? updated.company_id;
   saving = true;
@@ -950,12 +959,13 @@ async function onCompanyDelete(co) {
 
 // ---- 編輯公司檔案 ----
 
-// 下拉選單（可以「＋ 新增選項」）；選單內容＝預設值＋所有公司填過的值
-function pickSelectHtml(name, value, field) {
-  const options = pickOptions(Store.companies, field);
+// 下拉選單（可以「＋ 新增選項」）；選單內容＝預設值＋所有公司（或所有名片，list 決定）填過的值
+function pickSelectHtml(name, value, field, list = Store.companies) {
+  const options = pickOptions(list, field);
   if (value && !options.includes(value)) options.push(value);
+  const label = COMPANY_LABEL[field] || FIELD_LABEL[field] || '選項';
   return `
-    <select name="${esc(name)}" data-pick data-label="${esc(COMPANY_LABEL[field] || '選項')}" data-prev="${esc(value || '')}">
+    <select name="${esc(name)}" data-pick data-label="${esc(label)}" data-prev="${esc(value || '')}">
       <option value="">（未填）</option>
       ${options.map((o) => `<option value="${esc(o)}" ${o === value ? 'selected' : ''}>${esc(o)}</option>`).join('')}
       <option value="__new">＋ 新增選項…</option>
@@ -1071,35 +1081,113 @@ function syncProductOptions() {
   for (const s of selects) for (const v of values) addOption(s, v);
 }
 
+// ======================= 補查公司檔案 =======================
+// v0.3.0 以前拍的名片沒有公司檔案；這裡把它們的照片重新交給辨識主機，只拿「公司檔案草稿」來用，名片欄位不動
+
+let backfillRunning = false;
+
+// 要補查的名片：有照片，而且（還沒歸屬公司、但有公司名或公司信箱）或（公司檔案的全名和簡介都空著）
+function cardsNeedingProfile() {
+  return Store.cards.filter((c) => {
+    if (!c.photos?.length) return false;
+    const co = companyOf(c);
+    if (!co) return !!(c.company || cardDomains(c).length);
+    return !co.full_name && !co.about;
+  });
+}
+
+async function onBackfillCompanies() {
+  if (backfillRunning) {
+    toast('正在補查中，請等它跑完');
+    return;
+  }
+  const targets = cardsNeedingProfile();
+  if (!targets.length) {
+    toast('所有名片的公司都有全名或簡介了');
+    return;
+  }
+  const ok = await confirmDialog({
+    title: `補查 ${targets.length} 張名片的公司檔案？`,
+    message: '會請電腦上的 Claude 重新看這幾張名片的照片，查公司全名、在做什麼、產業和地區。只補公司檔案，名片上的資料不會改。一張大約 10～20 秒，同公司的第二張起會直接沿用；跑的時候 App 不要關。',
+    okText: '開始',
+  });
+  if (!ok) return;
+  backfillRunning = true;
+  let linked = 0;   // 補到全名或簡介
+  let notFound = 0; // 有公司檔案了，但 AI 查不到全名和簡介
+  let skipped = 0;  // 名片上沒有公司名也沒有公司信箱
+  let failed = 0;
+  try {
+    for (const [i, target] of targets.entries()) {
+      toast(`補查公司檔案 ${i + 1}/${targets.length}…`, 60000);
+      const card = Store.get(target.id);
+      if (!card) continue;
+      try {
+        // 同公司前一張已經查好了 → 直接歸過去，不用再讀照片
+        const known = matchCompany(card, Store.companies);
+        const auto = known && (known.full_name || known.about)
+          ? {}
+          : (await recognizeCard(await backend.getPhoto(card.photos[0]))).auto;
+        const result = await Store.linkCompany(card, auto);
+        if (!result.company_id) {
+          skipped += 1;
+          continue;
+        }
+        if (result.company_id !== card.company_id) await Store.update(result);
+        const co = Store.getCompany(result.company_id);
+        if (co?.full_name || co?.about) linked += 1; else notFound += 1;
+      } catch (err) {
+        console.warn('backfill failed', card.id, err);
+        failed += 1;
+      }
+    }
+  } finally {
+    backfillRunning = false;
+  }
+  toast(`補查完成：${linked} 張補到公司全名／簡介`
+    + `${notFound ? `；${notFound} 張的公司 AI 查不到（公司檔案已建好，可以自己填）` : ''}`
+    + `${skipped ? `；${skipped} 張名片上沒有公司名，略過` : ''}`
+    + `${failed ? `；${failed} 張失敗（可以再按一次）` : ''}`, 6000);
+  if (parseRoute().name === 'settings') renderSettings();
+}
+
 // ======================= 整理下拉選單 =======================
 // 打錯字、同一個東西兩種寫法 → 在這裡改名合併（全部公司一起改）
 
+// 選單欄位在哪裡：名片（個人，例如國籍）或公司檔案
+const isCardField = (field) => CARD_PICK_FIELDS.includes(field);
+const optionSource = (field) => (isCardField(field)
+  ? { list: Store.cards, unit: '張名片', label: FIELD_LABEL[field], nameOf: (c) => c.name || c.name_alt || '（沒有姓名）', save: (c) => Store.update(c) }
+  : { list: Store.companies, unit: '家公司', label: COMPANY_LABEL[field], nameOf: companyDisplayName, save: (c) => Store.updateCompany(c) });
+
 function renderOptions() {
   $app.dataset.view = 'options';
-  const fields = [...PICK_FIELDS, PRODUCT_FIELD];
+  const fields = [...CARD_PICK_FIELDS, ...PICK_FIELDS, PRODUCT_FIELD];
   $app.innerHTML = `
     ${topbar('整理下拉選單')}
     <div class="settings">
-      <p class="muted small">點一個選項可以改名（所有公司一起改），或從所有公司清掉。數字＝幾家公司在用。</p>
+      <p class="muted small">點一個選項可以改名（全部一起改），或全部清掉。數字＝有幾張名片／幾家公司在用。</p>
       ${fields.map((f) => {
-        const counts = optionCounts(Store.companies, f);
-        const opts = pickOptions(Store.companies, f);
+        const src = optionSource(f);
+        const counts = optionCounts(src.list, f);
+        const opts = pickOptions(src.list, f);
         return `
           <section class="set-group">
-            <div class="set-title">${esc(COMPANY_LABEL[f])}</div>
+            <div class="set-title">${esc(src.label)}${isCardField(f) ? '（名片）' : ''}</div>
             <div class="opt-chips">${opts.length
               ? opts.map((o) => `<button type="button" class="chip" data-action="opt-edit" data-field="${f}" data-value="${esc(o)}">${esc(o)} <span class="opt-n">${counts.get(o) || 0}</span></button>`).join('')
-              : '<span class="muted small">還沒有選項（在公司編輯頁選「＋ 新增選項」就會出現在這裡）</span>'}</div>
+              : `<span class="muted small">還沒有選項（在${isCardField(f) ? '名片' : '公司'}編輯頁選「＋ 新增選項」就會出現在這裡）</span>`}</div>
           </section>`;
       }).join('')}
     </div>`;
 }
 
 async function onOptionEdit(field, value) {
-  const n = optionCounts(Store.companies, field).get(value) || 0;
-  const choice = await actionSheet(`「${value}」（${n} 家公司在用）`, [
-    { label: '改名（所有公司一起改）', value: 'rename' },
-    { label: '從所有公司清掉', value: 'clear', danger: true },
+  const src = optionSource(field);
+  const n = optionCounts(src.list, field).get(value) || 0;
+  const choice = await actionSheet(`「${value}」（${n} ${src.unit}在用）`, [
+    { label: '改名（全部一起改）', value: 'rename' },
+    { label: '全部清掉', value: 'clear', danger: true },
   ]);
   if (!choice) return;
   let to = '';
@@ -1108,22 +1196,22 @@ async function onOptionEdit(field, value) {
     to = (input || '').trim();
     if (!to || to === value) return;
   }
-  const changed = renameOption(Store.companies, field, value, to);
+  const changed = renameOption(src.list, field, value, to);
   if (!changed.length) {
-    toast('沒有公司在用這個選項（預設選項會一直留在選單裡）', 3500);
+    toast(`沒有${src.unit.slice(1)}在用這個選項（預設選項會一直留在選單裡）`, 3500);
     return;
   }
-  const names = changed.slice(0, 5).map(companyDisplayName).join('、') + (changed.length > 5 ? '…' : '');
+  const names = changed.slice(0, 5).map(src.nameOf).join('、') + (changed.length > 5 ? '…' : '');
   const ok = await confirmDialog({
-    title: choice === 'rename' ? `確定把「${value}」改成「${to}」？` : `確定從所有公司清掉「${value}」？`,
-    message: `會改到 ${changed.length} 家公司：${names}`,
+    title: choice === 'rename' ? `確定把「${value}」改成「${to}」？` : `確定全部清掉「${value}」？`,
+    message: `會改到 ${changed.length} ${src.unit}：${names}`,
     okText: '確定',
     danger: choice === 'clear',
   });
   if (!ok) return;
   try {
-    for (const co of changed) await Store.updateCompany(co);
-    toast(`已更新 ${changed.length} 家公司`);
+    for (const item of changed) await src.save(item);
+    toast(`已更新 ${changed.length} ${src.unit}`);
   } catch (err) {
     handleError(err, '更新失敗（可能只改了一部分，請重新整理後再看一次）');
   }
@@ -1184,7 +1272,8 @@ async function renderSettings() {
       </section>
       <section class="set-group">
         <div class="set-title">公司檔案</div>
-        <a class="set-row link" href="#/options">🗂️ 整理下拉選單 <span class="muted">（關係、產業、地區、產品…改名或合併）</span></a>
+        <a class="set-row link" href="#/options">🗂️ 整理下拉選單 <span class="muted">（國籍、關係、產業、地區、產品…改名或合併）</span></a>
+        <button type="button" class="set-row link" data-action="backfill">🔄 補查公司檔案 <span class="muted">（${cardsNeedingProfile().length} 張名片的公司還沒有全名／簡介）</span></button>
       </section>
       ${!isStandalone() ? `
       <section class="set-group">
@@ -1292,6 +1381,7 @@ function onClick(e) {
       break;
     case 'remove-product': el.closest('.prod-row')?.remove(); break;
     case 'opt-edit': onOptionEdit(el.dataset.field, el.dataset.value); break;
+    case 'backfill': onBackfillCompanies(); break;
     case 'camera': onCamera(); break;
     case 'album': document.getElementById('file-album').click(); break;
     case 'queue-item': onQueueItem(el.dataset.qid); break;
