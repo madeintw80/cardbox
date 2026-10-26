@@ -85,13 +85,13 @@
 - ✅ 本機收件櫃：安全檢查 8/8、端到端 6/6（真的用 Claude 讀測試名片，10 秒）
 - ✅ App 真正的 `ocr.js` 對接本機收件櫃：等待辨識 → 辨識中 → 拿到結果（12.9 秒）；電腦離線時 83 秒後顯示離線提示
 - ✅ 線上收件櫃安全檢查 10/10；拿件小程式以常駐服務上線、線上 D1 顯示 0.8 秒前報到
-- ⏳ 未驗證：真 Google 登入／Drive／Sheets、手機實機相機（要 Boss 用手機測；先設好白名單）
+- ⏳ 未驗證：真 Google 登入／Drive／Sheets、手機實機相機（白名單 2026-10-27 已設好，等 Boss 用手機實測）
 
 ## 線上狀態
 
 - App：`https://madeintw80.github.io/cardbox/`（repo `madeintw80/cardbox` public，Pages＝main／root），v0.2.0
 - 收件櫃：`https://cardbox-ocr.madeintw80.workers.dev`（D1 `cardbox-jobs`、KV `USAGE`）
-- 機密：`RUNNER_SECRET`（已設）、`ALLOWED_EMAILS`（**待 Boss 雙擊 `worker/set_allowed_emails.bat`**；沒設之前所有人 403）
+- 機密：`RUNNER_SECRET`（已設）、`ALLOWED_EMAILS`（2026-10-27 Boss 雙擊 `worker/set_allowed_emails.bat` 設好朋友＋Boss 兩個 Gmail；要加人或換人就再雙擊一次，每次會整份蓋掉舊名單，所以要全部重打）
 - ⚠️ 線上冒煙要帶瀏覽器 User-Agent（Cloudflare 會擋 Python 預設 UA，回 error code 1010）；拿件小程式用自訂 UA
 - ⚠️ 部署後 10～40 秒內新舊版會交替（舊版路徑回 404），測試要等一下
 
